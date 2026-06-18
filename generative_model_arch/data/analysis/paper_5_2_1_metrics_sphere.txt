@@ -1,0 +1,4 @@
+--- SECTION 5.2.1: MINIMAX KSI QUANTITATIVE METRICS (SPHERE) ---
+Sliced-Wasserstein Distance : 20.063663
+Maximum Mean Discrepancy    : 0.908415
+1-NN Two-Sample Accuracy    : 0.995000 (Optimal: ~0.50)

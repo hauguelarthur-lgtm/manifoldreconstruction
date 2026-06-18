@@ -2,9 +2,6 @@ import torch
 import os
 import sys
 import argparse
-import numpy as np
-from scipy.optimize import linear_sum_assignment
-from scipy.spatial.distance import cdist
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(script_dir) == "scripts":
@@ -17,6 +14,32 @@ if project_root not in sys.path:
 from src.wavelet_map import TruncatedBesovWaveletMap, compute_feature_gradients
 from src.local_linear_regression import solve_local_system
 
+def sinkhorn_ot(X: torch.Tensor, Y: torch.Tensor, epsilon: float = 0.05, iterations: int = 100) -> torch.Tensor:
+    """
+    Log-domain Entropic Regularized Optimal Transport.
+    Returns the permutation indices mapping Y to X.
+    Executes entirely on GPU with O(N^2) complexity.
+    """
+    N = X.size(0)
+    C = torch.cdist(X, Y, p=2) ** 2
+    
+    # Log-domain initialization
+    log_K = -C / epsilon
+    log_u = torch.zeros(N, device=X.device)
+    log_v = torch.zeros(N, device=Y.device)
+    
+    for _ in range(iterations):
+        # Update v
+        log_v = -torch.logsumexp(log_K + log_u.unsqueeze(1), dim=0)
+        # Update u
+        log_u = -torch.logsumexp(log_K + log_v.unsqueeze(0), dim=1)
+        
+    log_P = log_K + log_u.unsqueeze(1) + log_v.unsqueeze(0)
+    P = torch.exp(log_P)
+    
+    # Extract hard assignment via argmax
+    return torch.argmax(P, dim=1)
+
 def main():
     default_data_dir = os.path.join(project_root, "data", "processed")
     parser = argparse.ArgumentParser()
@@ -27,22 +50,25 @@ def main():
     parser.add_argument("--time_steps", type=int, default=50)
     args = parser.parse_args()
 
-    data = torch.load(os.path.join(args.data_dir, "data.pt"))
-    labels = torch.load(os.path.join(args.data_dir, "labels.pt"))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    data = torch.load(os.path.join(args.data_dir, "data.pt")).to(device)
+    labels = torch.load(os.path.join(args.data_dir, "labels.pt")).to(device)
     num_charts = int(labels.max().item() + 1)
 
-    model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc)
+    model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc).to(device)
     model.eval()
 
-    print("Computing L2 Optimal Transport matching between prior Z and target X...")
+    print("Computing Entropic Optimal Transport (Sinkhorn) matching...")
     Z_raw = torch.randn_like(data)
-    cost_matrix = cdist(Z_raw.cpu().numpy(), data.cpu().numpy(), metric='sqeuclidean')
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    
+    # GPU-accelerated matching
+    col_ind = sinkhorn_ot(Z_raw, data, epsilon=0.05, iterations=100)
     
     Z = torch.zeros_like(Z_raw)
-    Z[col_ind] = Z_raw[row_ind] 
-
-    z_clusters = [Z[labels == i] for i in range(num_charts)]
+    Z[col_ind] = Z_raw # Permute Z to match data
+    
+    z_clusters = [Z[labels == i].cpu() for i in range(num_charts)]
     torch.save(z_clusters, os.path.join(args.data_dir, "z_clusters.pt"))
 
     time_grid = torch.linspace(0, 1.0, args.time_steps)
@@ -60,7 +86,7 @@ def main():
             dot_I_t_i = dot_I_t[chart_mask]
             
             if I_t_i.size(0) == 0:
-                eta_t_local.append(torch.zeros(args.p_trunc, device=data.device))
+                eta_t_local.append(torch.zeros(args.p_trunc, device=device))
                 continue
                 
             feature_grads_i = compute_feature_gradients(model, I_t_i)

@@ -1,0 +1,5 @@
+--- SECTION 5.2.1: MINIMAX KSI QUANTITATIVE METRICS ---
+Sliced-Wasserstein Distance : 0.149860
+Maximum Mean Discrepancy    : 0.097757
+Covariance Distance         : 2.504534
+1-NN Two-Sample Accuracy    : 0.794500 (Optimal: ~0.50)
