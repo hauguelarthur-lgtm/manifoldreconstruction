@@ -1,19 +1,25 @@
 import torch
 import numpy as np
-from sklearn.cluster import KMeans
+from sklearn.cluster import SpectralClustering
 
 def partition_data(data: torch.Tensor, num_charts: int, random_state: int = 42) -> tuple:
-    """
-    Partitions the empirical dataset into 'm' localized neighborhoods (charts).
-    Satisfies the theoretical injectivity radius bound by localizing the Euclidean geometry.
-    """
     data_np = data.detach().cpu().numpy()
     
-    kmeans = KMeans(n_clusters=num_charts, random_state=random_state, n_init='auto')
-    labels_np = kmeans.fit_predict(data_np)
-    centers_np = kmeans.cluster_centers_
-    
+    # K-NN affinity enforces intrinsic manifold geometry
+    clustering = SpectralClustering(
+        n_clusters=num_charts, 
+        affinity='nearest_neighbors',
+        n_neighbors=15,
+        random_state=random_state
+    )
+    labels_np = clustering.fit_predict(data_np)
     labels = torch.tensor(labels_np, dtype=torch.long, device=data.device)
-    cluster_centers = torch.tensor(centers_np, dtype=torch.float32, device=data.device)
+    
+    # Compute empirical Euclidean barycenters for downstream references
+    centers = []
+    for i in range(num_charts):
+        mask = (labels == i)
+        centers.append(data[mask].mean(dim=0))
+    cluster_centers = torch.stack(centers)
     
     return labels, cluster_centers

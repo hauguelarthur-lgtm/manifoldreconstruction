@@ -2,8 +2,10 @@ import torch
 import os
 import sys
 import argparse
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import cdist
 
-# Robust path resolution and module import access
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(script_dir) == "scripts":
     project_root = os.path.dirname(script_dir)
@@ -17,16 +19,14 @@ from src.local_linear_regression import solve_local_system
 
 def main():
     default_data_dir = os.path.join(project_root, "data", "processed")
-
-    parser = argparse.ArgumentParser(description="Generates local eta_t coefficients across discrete time steps.")
-    parser.add_argument("--data_dir", type=str, default=default_data_dir, help="Directory with clustered data.")
-    parser.add_argument("--ambient_dim", type=int, default=16, help="Ambient space dimension (p).")
-    parser.add_argument("--intrinsic_dim", type=int, default=4, help="Intrinsic manifold dimension (d).")
-    parser.add_argument("--p_trunc", type=int, default=64, help="Wavelet truncation level (P).")
-    parser.add_argument("--time_steps", type=int, default=50, help="Number of discretization steps for the SDE.")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, default=default_data_dir)
+    parser.add_argument("--ambient_dim", type=int, default=16)
+    parser.add_argument("--intrinsic_dim", type=int, default=4)
+    parser.add_argument("--p_trunc", type=int, default=64)
+    parser.add_argument("--time_steps", type=int, default=50)
     args = parser.parse_args()
 
-    # Load processed data
     data = torch.load(os.path.join(args.data_dir, "data.pt"))
     labels = torch.load(os.path.join(args.data_dir, "labels.pt"))
     num_charts = int(labels.max().item() + 1)
@@ -34,19 +34,23 @@ def main():
     model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc)
     model.eval()
 
+    print("Computing L2 Optimal Transport matching between prior Z and target X...")
+    Z_raw = torch.randn_like(data)
+    cost_matrix = cdist(Z_raw.cpu().numpy(), data.cpu().numpy(), metric='sqeuclidean')
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    
+    Z = torch.zeros_like(Z_raw)
+    Z[col_ind] = Z_raw[row_ind] 
+
+    z_clusters = [Z[labels == i] for i in range(num_charts)]
+    torch.save(z_clusters, os.path.join(args.data_dir, "z_clusters.pt"))
+
     time_grid = torch.linspace(0, 1.0, args.time_steps)
     all_etas = []
-
     print(f"Solving {num_charts} local systems across {args.time_steps} time steps...")
 
     for step, t in enumerate(time_grid):
         eta_t_local = []
-        # Generate matched Gaussian noise for the interpolant targets
-        Z = torch.randn_like(data)
-        
-        # Calculate Stochastic Interpolant components at time t
-        # I_t = (1-t)*Z + t*A
-        # \dot{I}_t = A - Z
         I_t = (1.0 - t.item()) * Z + t.item() * data
         dot_I_t = data - Z
         
@@ -59,10 +63,7 @@ def main():
                 eta_t_local.append(torch.zeros(args.p_trunc, device=data.device))
                 continue
                 
-            # Compute feature map gradients evaluated at the interpolant state
             feature_grads_i = compute_feature_gradients(model, I_t_i)
-            
-            # Solve exact linear system K_t \eta_t = r_t
             eta = solve_local_system(feature_grads_i, dot_I_t_i)
             eta_t_local.append(eta)
             
@@ -71,7 +72,6 @@ def main():
             print(f"Solved step {step + 1}/{args.time_steps}")
 
     torch.save(all_etas, os.path.join(args.data_dir, "precomputed_etas.pt"))
-    print("Linear regression complete. Velocity coefficients saved.")
 
 if __name__ == "__main__":
     main()

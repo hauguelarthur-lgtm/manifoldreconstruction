@@ -3,7 +3,6 @@ import os
 import sys
 import argparse
 
-# Robust path resolution and module import access
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(script_dir) == "scripts":
     project_root = os.path.dirname(script_dir)
@@ -12,55 +11,110 @@ else:
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Corrected imports for flat src/ directory structure
-from src.wavelet_map import TruncatedBesovWaveletMap
+from src.wavelet_map import TruncatedBesovWaveletMap, compute_feature_gradients
+from src.diffusion import compute_optimal_diffusion
 from src.SDEintegrator import generate_samples
+
+def generate_samples(model: torch.nn.Module,
+                     precomputed_etas: list, 
+                     z_clusters: list,
+                     chart_assignments: torch.Tensor,
+                     num_samples: int, 
+                     ambient_dim: int, 
+                     num_time_steps: int = 100,
+                     device: torch.device = torch.device('cpu'),
+                     ode_mode: bool = False) -> torch.Tensor:
+    
+    X_t = torch.zeros(num_samples, ambient_dim, device=device)
+    num_charts = len(z_clusters)
+    
+    # Initialize from local empirical base measures
+    for i in range(num_charts):
+        mask = (chart_assignments == i)
+        n_samples_i = mask.sum().item()
+        if n_samples_i == 0: continue
+            
+        Z_i = z_clusters[i].to(device)
+        mu_i = Z_i.mean(dim=0)
+        cov_i = torch.cov(Z_i.T) + torch.eye(ambient_dim, device=device) * 1e-4
+        
+        dist = torch.distributions.MultivariateNormal(mu_i, cov_i)
+        X_t[mask] = dist.sample((n_samples_i,))
+
+    dt = 1.0 / num_time_steps
+    time_grid = torch.linspace(0, 1.0 - dt, num_time_steps)
+    model.eval()
+    
+    for step, t in enumerate(time_grid):
+        X_t = X_t.detach()
+        feature_grads = compute_feature_gradients(model, X_t)
+        etas_t = precomputed_etas[step] 
+        b_t = torch.zeros_like(X_t)
+        
+        for i in range(num_charts):
+            mask = (chart_assignments == i)
+            if not mask.any(): continue
+                
+            eta_i = etas_t[i].to(device)
+            grads_i = feature_grads[mask]
+            b_t[mask] = torch.matmul(grads_i.transpose(1, 2), eta_i.unsqueeze(1)).squeeze(-1)
+        
+        # STRICT VECTOR FIELD CLIPPING
+        # Bounds maximum spatial jump per step to prevent Euler numerical explosion
+        max_drift = 10.0
+        drift_norms = torch.norm(b_t, dim=1, keepdim=True)
+        b_t = b_t * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
+        
+        if step % 10 == 0:
+            print(f"Step {step} | Mean L2 Drift: {torch.norm(b_t, dim=1).mean().item():.6f}")
+
+        if ode_mode:
+            X_t = X_t + b_t * dt
+        else:
+            D_t_star = compute_optimal_diffusion(t.item())
+            dW = torch.randn_like(X_t) * torch.sqrt(torch.tensor(dt, device=device))
+            X_t = X_t + b_t * dt + torch.sqrt(torch.tensor(2 * D_t_star, device=device)) * dW
+            
+    return X_t.detach()
 
 def main():
     default_data_dir = os.path.join(project_root, "data", "processed")
-
-    parser = argparse.ArgumentParser(description="Runs the SDE integrator using precomputed eta_t matrices.")
-    parser.add_argument("--data_dir", type=str, default=default_data_dir, help="Directory with processed data.")
-    parser.add_argument("--ambient_dim", type=int, default=16, help="Ambient space dimension (p).")
-    parser.add_argument("--intrinsic_dim", type=int, default=4, help="Intrinsic manifold dimension (d).")
-    parser.add_argument("--p_trunc", type=int, default=64, help="Wavelet truncation level (P).")
-    parser.add_argument("--num_samples", type=int, default=1000, help="Number of synthetic samples to generate.")
-    parser.add_argument("--time_steps", type=int, default=50, help="Number of discretization steps matching the solver.")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, default=default_data_dir)
+    parser.add_argument("--ambient_dim", type=int, default=16)
+    parser.add_argument("--intrinsic_dim", type=int, default=4)
+    parser.add_argument("--p_trunc", type=int, default=64)
+    parser.add_argument("--num_samples", type=int, default=1000)
+    parser.add_argument("--time_steps", type=int, default=50)
+    parser.add_argument("--ode_mode", action="store_true")
     args = parser.parse_args()
 
-    # Dynamic device allocation for hardware acceleration
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    cluster_centers_path = os.path.join(args.data_dir, "cluster_centers.pt")
-    etas_path = os.path.join(args.data_dir, "precomputed_etas.pt")
+    labels = torch.load(os.path.join(args.data_dir, "labels.pt"), map_location=device)
+    precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas.pt"), map_location=device)
+    z_clusters = torch.load(os.path.join(args.data_dir, "z_clusters.pt"), map_location=device)
 
-    # Strict validation of upstream artifacts
-    if not os.path.exists(cluster_centers_path) or not os.path.exists(etas_path):
-        raise FileNotFoundError(
-            f"Missing upstream artifacts in {args.data_dir}. "
-            "Ensure 01_cluster_data.py and 02_solve_velocities.py have been executed strictly in order."
-        )
-
-    # Load artifacts required for SDE generation with explicit device mapping
-    cluster_centers = torch.load(cluster_centers_path, map_location=device)
-    precomputed_etas = torch.load(etas_path, map_location=device)
+    num_charts = int(labels.max().item() + 1)
+    chart_counts = torch.bincount(labels, minlength=num_charts).float()
+    chart_probs = chart_counts / chart_counts.sum()
+    chart_assignments = torch.multinomial(chart_probs, args.num_samples, replacement=True).to(device)
 
     model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc).to(device)
     
-    print(f"Initializing SDE Integration for {args.num_samples} samples on {device}...")
     generated_data = generate_samples(
         model=model,
         precomputed_etas=precomputed_etas,
-        cluster_centers=cluster_centers,
+        z_clusters=z_clusters,
+        chart_assignments=chart_assignments,
         num_samples=args.num_samples,
         ambient_dim=args.ambient_dim,
         num_time_steps=args.time_steps,
-        device=device
+        device=device,
+        ode_mode=args.ode_mode
     )
 
-    output_path = os.path.join(args.data_dir, "generated_samples.pt")
-    torch.save(generated_data, output_path)
-    print(f"Generation complete. Synthetic manifold samples saved to {output_path}.")
+    torch.save(generated_data, os.path.join(args.data_dir, "generated_samples.pt"))
 
 if __name__ == "__main__":
     main()
