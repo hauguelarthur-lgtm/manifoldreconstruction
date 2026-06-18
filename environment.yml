@@ -1,0 +1,17 @@
+name: minimax_ksi
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio
+  - cpuonly            # Replace 'cpuonly' with 'pytorch-cuda=11.8' or '12.1' for GPU acceleration
+  - scikit-learn
+  - pyyaml
+  - numpy
+  - pip
+  - pip:
+    - kymatio          # Required for Wavelet Scattering Transform implementations

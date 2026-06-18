@@ -1,2 +1,19 @@
 # Hyperparameters: ambient dim (p), intrinsic dim (d), 
 # regularity (beta), number of charts (m), num_time_steps.
+# Hyperparameters for Minimax-Optimal KSI Pipeline
+manifold:
+  ambient_dim: 16       # p: Dimension of the ambient space
+  intrinsic_dim: 4      # d: Estimated intrinsic dimension of the manifold
+  num_samples: 5000     # N: Number of empirical data points to generate/use
+
+geometry:
+  num_charts: 10        # m: Number of localized Euclidean patches for clustering
+  regularity: 2.0       # beta: Assumed structural smoothness of the manifold
+
+features:
+  p_trunc: 64           # P: Truncation limit for the wavelet expansion. 
+                        # Theoretically scaled as P ~ n^{d/(2\beta+d)}
+
+integration:
+  time_steps: 50        # Discretization resolution for the SDE integration
+  num_gen_samples: 1000 # Number of synthetic samples to generate during inference
