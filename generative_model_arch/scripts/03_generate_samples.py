@@ -12,6 +12,7 @@ else:
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# Corrected imports for flat src/ directory structure
 from src.wavelet_map import TruncatedBesovWaveletMap
 from src.SDEintegrator import generate_samples
 
@@ -27,13 +28,26 @@ def main():
     parser.add_argument("--time_steps", type=int, default=50, help="Number of discretization steps matching the solver.")
     args = parser.parse_args()
 
-    # Load artifacts required for SDE generation
-    cluster_centers = torch.load(os.path.join(args.data_dir, "cluster_centers.pt"))
-    precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas.pt"))
+    # Dynamic device allocation for hardware acceleration
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc)
+    cluster_centers_path = os.path.join(args.data_dir, "cluster_centers.pt")
+    etas_path = os.path.join(args.data_dir, "precomputed_etas.pt")
+
+    # Strict validation of upstream artifacts
+    if not os.path.exists(cluster_centers_path) or not os.path.exists(etas_path):
+        raise FileNotFoundError(
+            f"Missing upstream artifacts in {args.data_dir}. "
+            "Ensure 01_cluster_data.py and 02_solve_velocities.py have been executed strictly in order."
+        )
+
+    # Load artifacts required for SDE generation with explicit device mapping
+    cluster_centers = torch.load(cluster_centers_path, map_location=device)
+    precomputed_etas = torch.load(etas_path, map_location=device)
+
+    model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc).to(device)
     
-    print(f"Initializing SDE Integration for {args.num_samples} samples...")
+    print(f"Initializing SDE Integration for {args.num_samples} samples on {device}...")
     generated_data = generate_samples(
         model=model,
         precomputed_etas=precomputed_etas,
@@ -41,7 +55,7 @@ def main():
         num_samples=args.num_samples,
         ambient_dim=args.ambient_dim,
         num_time_steps=args.time_steps,
-        device=torch.device('cpu')
+        device=device
     )
 
     output_path = os.path.join(args.data_dir, "generated_samples.pt")

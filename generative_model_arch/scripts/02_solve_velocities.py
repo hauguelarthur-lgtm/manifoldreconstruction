@@ -1,4 +1,3 @@
-# Generates local eta_t coefficients across discrete time steps.
 import torch
 import os
 import sys
@@ -13,22 +12,23 @@ else:
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from src.manifoldclustering import partition_data
-from src.wavelet_map import TruncatedBesovWaveletMap
+from src.wavelet_map import TruncatedBesovWaveletMap, compute_feature_gradients
+from src.local_linear_regression import solve_local_system
 
 def main():
-    default_data_path = os.path.join(project_root, "data", "raw", "dataset.pt")
-    default_output_dir = os.path.join(project_root, "data", "processed")
+    default_data_dir = os.path.join(project_root, "data", "processed")
 
-    parser = argparse.ArgumentParser(description="Partitions ambient data into topological patches.")
-    parser.add_argument("--data_path", type=str, default=default_data_path, help="Path to raw empirical data tensor (N, p).")
-    parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Directory to save clustered data.")
-    parser.add_argument("--num_charts", type=int, default=10, help="Number of local Euclidean charts (m).")
+    parser = argparse.ArgumentParser(description="Generates local eta_t coefficients across discrete time steps.")
+    parser.add_argument("--data_dir", type=str, default=default_data_dir, help="Directory with clustered data.")
+    parser.add_argument("--ambient_dim", type=int, default=16, help="Ambient space dimension (p).")
+    parser.add_argument("--intrinsic_dim", type=int, default=4, help="Intrinsic manifold dimension (d).")
+    parser.add_argument("--p_trunc", type=int, default=64, help="Wavelet truncation level (P).")
+    parser.add_argument("--time_steps", type=int, default=50, help="Number of discretization steps for the SDE.")
     args = parser.parse_args()
 
     # Load processed data
-    data = torch.load(os.path.join(args.output_dir, "data.pt"))
-    labels = torch.load(os.path.join(args.output_dir, "labels.pt"))
+    data = torch.load(os.path.join(args.data_dir, "data.pt"))
+    labels = torch.load(os.path.join(args.data_dir, "labels.pt"))
     num_charts = int(labels.max().item() + 1)
 
     model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc)
@@ -70,7 +70,7 @@ def main():
         if (step + 1) % 10 == 0:
             print(f"Solved step {step + 1}/{args.time_steps}")
 
-    torch.save(all_etas, os.path.join(args.output_dir, "precomputed_etas.pt"))
+    torch.save(all_etas, os.path.join(args.data_dir, "precomputed_etas.pt"))
     print("Linear regression complete. Velocity coefficients saved.")
 
 if __name__ == "__main__":
