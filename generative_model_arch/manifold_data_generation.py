@@ -34,9 +34,16 @@ def generate_nonlinear_manifold(num_samples: int, intrinsic_dim: int, ambient_di
     return X_ambient
 
 def main():
+    # Dynamically resolve the absolute path to the directory containing this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Construct absolute paths to the config file and output directory
+    default_config_path = os.path.join(script_dir, "configs", "default_config.yaml")
+    default_output_dir = os.path.join(script_dir, "data", "raw")
+
     parser = argparse.ArgumentParser(description="Generates synthetic manifold data based on YAML config.")
-    parser.add_argument("--config", type=str, default="../configs/default_config.yaml", help="Path to config file.")
-    parser.add_argument("--output_dir", type=str, default="../data/raw/", help="Output directory for raw tensor.")
+    parser.add_argument("--config", type=str, default=default_config_path, help="Path to config file.")
+    parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Output directory for raw tensor.")
     args = parser.parse_args()
 
     # Load parameters from configuration

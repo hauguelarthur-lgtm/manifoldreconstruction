@@ -1,7 +1,7 @@
 import torch
-from src.features.wavelet_map import compute_feature_gradients
-from src.dynamics.vector_field import compute_global_drift
-from src.sampler.diffusion_sched import compute_optimal_diffusion
+from src.wavelet_map import compute_feature_gradients
+from src.gluing import compute_global_drift
+from src.diffusion import compute_optimal_diffusion
 
 def generate_samples(model: torch.nn.Module,
                      precomputed_etas: list, 

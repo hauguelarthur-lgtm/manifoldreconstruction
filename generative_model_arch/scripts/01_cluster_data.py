@@ -1,15 +1,31 @@
 # Partitions ambient data into topological patches.
 import torch
 import os
+import sys
 import argparse
-from src.solver.clustering import partition_data
+
+# Robust path resolution and module import access
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if os.path.basename(script_dir) == "scripts":
+    project_root = os.path.dirname(script_dir)
+else:
+    project_root = script_dir
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from src.manifoldclustering import partition_data
 
 def main():
+    default_data_path = os.path.join(project_root, "data", "raw", "dataset.pt")
+    default_output_dir = os.path.join(project_root, "data", "processed")
+
     parser = argparse.ArgumentParser(description="Partitions ambient data into topological patches.")
-    parser.add_argument("--data_path", type=str, default="../data/raw/dataset.pt", help="Path to raw empirical data tensor (N, p).")
-    parser.add_argument("--output_dir", type=str, default="../data/processed/", help="Directory to save clustered data.")
+    parser.add_argument("--data_path", type=str, default=default_data_path, help="Path to raw empirical data tensor (N, p).")
+    parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Directory to save clustered data.")
     parser.add_argument("--num_charts", type=int, default=10, help="Number of local Euclidean charts (m).")
     args = parser.parse_args()
+
+    # Create output directory if it doesn't exist
 
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
