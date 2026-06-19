@@ -30,7 +30,7 @@ def generate_analytical_sphere(n_samples: int, ambient_dim: int) -> torch.Tensor
     data[:, 2] = z
     return data
 
-def generate_analytical_torus(n_samples: int, ambient_dim: int, R: float = 2.0, r: float = 1.0) -> torch.Tensor:
+def generate_analytical_torus(n_samples: int, ambient_dim: int, R: float = 2.0, r: float = 0.5) -> torch.Tensor:
     samples = []
     while len(samples) < n_samples:
         theta = torch.rand(n_samples) * 2 * np.pi
