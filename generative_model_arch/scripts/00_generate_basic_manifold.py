@@ -51,21 +51,30 @@ def generate_analytical_sphere(n_samples: int, ambient_dim: int) -> torch.Tensor
 
 def generate_analytical_torus(n_samples: int, ambient_dim: int, R: float = 2.0, r: float = 1.0) -> torch.Tensor:
     samples = []
-    while len(samples) < n_samples:
-        theta = torch.rand(n_samples) * 2 * np.pi
-        phi = torch.rand(n_samples) * 2 * np.pi
+    collected = 0
+    while collected < n_samples:
+        # Over-sample batched distributions to account for rejection rate
+        guess_n = n_samples - collected
+        theta = torch.rand(guess_n * 2) * 2 * torch.pi
+        phi = torch.rand(guess_n * 2) * 2 * torch.pi
+        
         p_accept = (R + r * torch.cos(theta)) / (R + r)
-        accept = torch.rand(n_samples) < p_accept
+        accept = torch.rand(guess_n * 2) < p_accept
+        
         valid_theta = theta[accept]
         valid_phi = phi[accept]
-        for t, p in zip(valid_theta, valid_phi):
-            if len(samples) < n_samples:
-                x = (R + r * np.cos(t)) * np.cos(p)
-                y = (R + r * np.cos(t)) * np.sin(p)
-                z = r * np.sin(t)
-                samples.append([x, y, z])
+        
+        # Vectorized coordinate computation
+        x = (R + r * torch.cos(valid_theta)) * torch.cos(valid_phi)
+        y = (R + r * torch.cos(valid_theta)) * torch.sin(valid_phi)
+        z = r * torch.sin(valid_theta)
+        
+        batch = torch.stack([x, y, z], dim=1)
+        samples.append(batch)
+        collected += batch.shape[0]
+        
     data = torch.zeros(n_samples, ambient_dim)
-    data[:, :3] = torch.tensor(samples, dtype=torch.float32)
+    data[:, :3] = torch.cat(samples, dim=0)[:n_samples]
     return data
 
 def generate_klein_bottle(n_samples: int, ambient_dim: int) -> torch.Tensor:

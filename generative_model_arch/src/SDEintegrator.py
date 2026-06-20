@@ -20,9 +20,9 @@ def generate_samples(X_0: torch.Tensor,
     cluster_centers = cluster_centers.to(device)
     model.eval()
     
-    epsilon_num = 1e-3
+    epsilon_num = 1e-5
     dt = (1.0 - epsilon_num) / (num_time_steps - 1)
-    time_grid = torch.linspace(0, 1.0 - 1e-5, num_time_steps)
+    time_grid = torch.linspace(0, 1.0 - epsilon_num, num_time_steps)
     max_drift = 15.0
 
     for step, t in enumerate(time_grid):

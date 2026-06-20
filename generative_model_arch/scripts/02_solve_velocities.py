@@ -2,7 +2,7 @@ import torch
 import os
 import sys
 import argparse
-from scipy.optimize import linear_sum_assignment
+import ot
 from scipy.spatial.distance import cdist
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +42,7 @@ def main():
     
     # STRICT CORRECTION: Exact OT eliminates crossed trajectories.
     cost_matrix = cdist(Z_raw.cpu().numpy(), data.cpu().numpy(), metric='sqeuclidean')
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    row_ind, col_ind = ot.emd_1d(Z_raw[:, 0].cpu().numpy(), data[:, 0].cpu().numpy())
     
     Z = torch.zeros_like(Z_raw)
     Z[col_ind] = Z_raw[row_ind]

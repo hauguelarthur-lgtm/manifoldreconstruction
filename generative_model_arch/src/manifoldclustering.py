@@ -29,7 +29,7 @@ def partition_data(data: torch.Tensor, num_charts: int, random_state: int = 42) 
         
         # Compute empirical covariance matrix
         centered_data = chart_data - mu
-        cov = torch.matmul(centered_data.T, centered_data) / (chart_data.size(0) - 1)
+        cov = torch.matmul(centered_data.T, centered_data) / max(chart_data.size(0) - 1, 1)
         
         # Inject Tikhonov stabilization to guarantee invertibility of the zero-subspace
         reg_cov = cov + torch.eye(p, device=data.device) * 1e-4
