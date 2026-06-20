@@ -15,16 +15,7 @@ from src.wavelet_map import TruncatedBesovWaveletMap, compute_feature_gradients
 from src.diffusion import compute_optimal_diffusion
 from src.SDEintegrator import generate_samples
 
-def compute_drift(X: torch.Tensor, model: torch.nn.Module, etas_t: list, chart_assignments: torch.Tensor, num_charts: int) -> torch.Tensor:
-    b_t = torch.zeros_like(X)
-    for i in range(num_charts):
-        mask = (chart_assignments == i)
-        if not mask.any(): continue
-        X_i = X[mask]
-        eta_i = etas_t[i].to(X.device)
-        grads_i = compute_feature_gradients(model, X_i) 
-        b_t[mask] = torch.matmul(grads_i.transpose(1, 2), eta_i.unsqueeze(1)).squeeze(-1)
-    return b_t
+
 
 
 
@@ -45,6 +36,7 @@ def main():
     labels = torch.load(os.path.join(args.data_dir, "labels.pt"), map_location=device)
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas.pt"), map_location=device)
     z_clusters = torch.load(os.path.join(args.data_dir, "z_clusters.pt"), map_location=device)
+    cluster_centers = torch.load(os.path.join(args.data_dir, "cluster_centers.pt"), map_location=device)
 
     num_charts = int(labels.max().item() + 1)
     chart_counts = torch.bincount(labels, minlength=num_charts).float()
@@ -72,7 +64,7 @@ def main():
         X_0=X_0,
         model=model,
         precomputed_etas=precomputed_etas,
-        chart_assignments=chart_assignments,
+        cluster_centers=cluster_centers,
         num_samples=args.num_samples,
         ambient_dim=args.ambient_dim,
         num_time_steps=args.time_steps,
