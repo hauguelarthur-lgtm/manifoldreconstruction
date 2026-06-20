@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--ambient_dim", type=int, default=16)
     parser.add_argument("--intrinsic_dim", type=int, default=4)
     parser.add_argument("--p_trunc", type=int, default=1024) # Matched feature capacity
-    parser.add_argument("--time_steps", type=int, default=100) # Matched precision
+    parser.add_argument("--time_steps", type=int, default=500) # Matched precision
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -48,14 +48,28 @@ def main():
     z_clusters = [Z[labels == i].cpu() for i in range(num_charts)]
     torch.save(z_clusters, os.path.join(args.data_dir, "z_clusters.pt"))
 
-    time_grid = torch.linspace(0, 1.0, args.time_steps)
+    time_grid = torch.linspace(0, 1.0 - 1e-3, args.time_steps)
     all_etas = []
 
-    print(f"Solving {num_charts} local systems across {args.time_steps} time steps...")
-    for step, t in enumerate(time_grid):
+    # Replaces the sequential loop over time_grid
+    print(f"Solving {num_charts} local systems batched across {args.time_steps} time steps...")
+    
+    # Precompute time grid tensors (T, 1, 1) for broadcasting
+    t_tensor = time_grid.view(-1, 1, 1).to(device)
+    
+    # Batch computation of the interpolant trajectories
+    # I_t_batch shape: (T, N, p)
+    I_t_batch = (1.0 - t_tensor) * Z.unsqueeze(0) + t_tensor * data.unsqueeze(0)
+    
+    # The derivative is constant across time for the standard interpolant
+    dot_I_t = data - Z
+    
+    all_etas = []
+    
+    # Iterate over time steps (still sequential, but operations inside are faster)
+    for step in range(args.time_steps):
         eta_t_local = []
-        I_t = (1.0 - t.item()) * Z + t.item() * data
-        dot_I_t = data - Z
+        I_t = I_t_batch[step]
         
         for i in range(num_charts):
             chart_mask = (labels == i)
@@ -68,7 +82,7 @@ def main():
                 
             feature_grads_i = compute_feature_gradients(model, I_t_i)
             eta = solve_local_system(feature_grads_i, dot_I_t_i)
-            eta_t_local.append(eta.cpu())
+            eta_t_local.append(eta)
             
         all_etas.append(eta_t_local)
         if (step + 1) % 10 == 0:

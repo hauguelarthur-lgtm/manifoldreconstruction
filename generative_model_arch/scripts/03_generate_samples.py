@@ -85,7 +85,7 @@ def main():
     parser.add_argument("--intrinsic_dim", type=int, default=4)
     parser.add_argument("--p_trunc", type=int, default=1024) # Increased feature capacity
     parser.add_argument("--num_samples", type=int, default=1000)
-    parser.add_argument("--time_steps", type=int, default=100) # Increased precision
+    parser.add_argument("--time_steps", type=int, default=500) # Increased precision
     parser.add_argument("--ode_mode", action="store_true")
     args = parser.parse_args()
 

@@ -1,4 +1,4 @@
 --- SECTION 5.2.1: MINIMAX KSI QUANTITATIVE METRICS (TORUS) ---
-Sliced-Wasserstein Distance : 0.104746
-Maximum Mean Discrepancy    : 0.090456
-1-NN Two-Sample Accuracy    : 0.981500 (Optimal: ~0.50)
+Sliced-Wasserstein Distance : 0.083076
+Maximum Mean Discrepancy    : 0.071425
+1-NN Two-Sample Accuracy    : 0.854000 (Optimal: ~0.50)

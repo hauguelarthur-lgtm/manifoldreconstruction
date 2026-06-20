@@ -1,20 +1,25 @@
 import torch
 
-def solve_local_system(feature_grads: torch.Tensor, target_vectors: torch.Tensor, reg: float = 1e-5) -> torch.Tensor:
+def solve_local_system(feature_grads: torch.Tensor, target_vectors: torch.Tensor, reg: float = 1e-2) -> torch.Tensor:
     """
-    Relaxed Ridge Regression: Allows the vector field to fully reach target coordinates
-    without premature shrinking, while preventing numerical singularity.
+    Solves local regression using the Normal Equations for CPU acceleration.
     """
     N_i, P, p = feature_grads.shape
-    A = feature_grads.transpose(1, 2).reshape(N_i * p, P)
-    B = target_vectors.reshape(N_i * p, 1)
+    phi_matrix = feature_grads.transpose(1, 2).reshape(N_i * p, P)
+    target = target_vectors.reshape(N_i * p, 1)
     
-    reg_tensor = torch.sqrt(torch.tensor(reg, device=A.device))
-    eye_P = torch.eye(P, device=A.device) * reg_tensor
-    A_aug = torch.cat([A, eye_P], dim=0)
+    # Compute the empirical Gram matrix (P x P)
+    # This matrix multiplication is highly optimized on CPUs
+    gram = torch.matmul(phi_matrix.t(), phi_matrix)
     
-    zero_aug = torch.zeros(P, 1, device=B.device)
-    B_aug = torch.cat([B, zero_aug], dim=0)
+    # Add Tikhonov regularization
+    gram += torch.eye(P, device=phi_matrix.device) * reg
     
-    eta_t = torch.linalg.lstsq(A_aug, B_aug, rcond=None).solution.squeeze(-1)
+    # Compute the right-hand side vector (P x 1)
+    rhs = torch.matmul(phi_matrix.t(), target)
+    
+    # Solve the positive-definite system via Cholesky decomposition
+    # Much faster than SVD/QR on the full N*p x P matrix
+    eta_t = torch.linalg.solve(gram, rhs).squeeze(-1)
+    
     return eta_t
