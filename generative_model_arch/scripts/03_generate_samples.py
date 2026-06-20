@@ -47,10 +47,6 @@ def main():
     centers_1 = torch.stack([data_k[labels == i].mean(dim=0) for i in range(num_charts)]).to(device)
     centers_0 = torch.stack([z_clusters[i].mean(dim=0) for i in range(num_charts)]).to(device)
 
-    chart_counts = torch.bincount(labels, minlength=num_charts).float()
-    chart_probs = chart_counts / chart_counts.sum()
-    chart_assignments = torch.multinomial(chart_probs, args.num_samples, replacement=True).to(device)
-
     X_0 = torch.zeros(args.num_samples, k, device=device)
     for i in range(num_charts):
         mask = (chart_assignments == i)
@@ -59,8 +55,7 @@ def main():
         
         Z_i = z_clusters[i].to(device)
         rand_idx = torch.randint(0, Z_i.size(0), (n_samples_i,), device=device)
-        # Initialize directly on the discrete optimal transport prior
-        X_0[mask] = Z_i[rand_idx] 
+        X_0[mask] = Z_i[rand_idx] + torch.randn_like(Z_i[rand_idx]) * 1e-4
 
     model = TruncatedBesovWaveletMap(k, args.intrinsic_dim, args.p_trunc).to(device)
     model.calibrate(data_k)

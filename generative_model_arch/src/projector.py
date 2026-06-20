@@ -20,7 +20,7 @@ class GlobalSubspaceProjector:
         V = Vh.T
         
         # Identify the spectral gap to determine the effective dimension k
-        explained_variance = (S ** 2) / (X.size(0) - 1)
+        explained_variance = (S ** 2) / max((X.size(0) - 1), 1)
         cumulative_variance = torch.cumsum(explained_variance, dim=0) / torch.sum(explained_variance)
         
         self.k = torch.searchsorted(cumulative_variance, self.variance_threshold).item() + 1

@@ -16,7 +16,6 @@ if project_root not in sys.path:
 
 from src.wavelet_map import TruncatedBesovWaveletMap, compute_feature_gradients
 from src.local_linear_regression import solve_local_system
-from src.projector import GlobalSubspaceProjector
 
 def main():
     default_data_dir = os.path.join(project_root, "data", "processed")
@@ -29,45 +28,21 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    data = torch.load(os.path.join(args.data_dir, "data.pt")).to(device)
+    # 1. Load Pre-Computed R^k Artifacts
+    projector = torch.load(os.path.join(args.data_dir, "projector.pt"), map_location=device)
+    k = projector.k
+    
+    data_k = torch.load(os.path.join(args.data_dir, "data_k.pt")).to(device)
     labels = torch.load(os.path.join(args.data_dir, "labels.pt")).to(device)
     num_charts = int(labels.max().item() + 1)
 
-    # 1. Execute SVD Global Subspace Truncation
-    projector = GlobalSubspaceProjector(variance_threshold=0.999)
-    data_k = projector.fit_transform(data)
-    k = projector.k
-    
-    torch.save(projector, os.path.join(args.data_dir, "projector.pt"))
-    torch.save(data_k, os.path.join(args.data_dir, "data_k.pt"))
-
-    # 2. Recompute Euclidean barycenters and Precision matrices strictly in R^k
-    centers_k = []
-    precisions_k = []
-    for i in range(num_charts):
-        mask = (labels == i)
-        chart_data = data_k[mask]
-        
-        mu = chart_data.mean(dim=0)
-        centers_k.append(mu)
-        
-        centered = chart_data - mu
-        dof = max(chart_data.size(0) - 1, 1)
-        cov = torch.matmul(centered.T, centered) / dof
-        
-        # Pseudo-inverse to isolate local tangent spaces within R^k
-        precisions_k.append(torch.linalg.pinv(cov, rcond=1e-3))
-
-    torch.save(torch.stack(centers_k), os.path.join(args.data_dir, "cluster_centers_k.pt"))
-    torch.save(torch.stack(precisions_k), os.path.join(args.data_dir, "cluster_precisions_k.pt"))
-
-    # 3. Initialize model in the reduced dimension k
+    # Initialize model in the reduced dimension k
     model = TruncatedBesovWaveletMap(k, args.intrinsic_dim, args.p_trunc).to(device)
     print("Calibrating Random Fourier Features via median distance heuristic...")
     model.calibrate(data_k)
     model.eval()
 
-    # 4. Compute Exact Optimal Transport in R^k
+    # 2. Compute Exact Optimal Transport strictly in R^k
     print(f"Computing Exact L2 Optimal Transport matching (POT EMD) in R^{k}...")
     Z_raw = torch.randn_like(data_k)
     
@@ -76,7 +51,7 @@ def main():
     b = np.ones(N) / N
     
     cost_matrix = cdist(Z_raw.cpu().numpy(), data_k.cpu().numpy(), metric='sqeuclidean')
-    T = ot.emd(a, b, cost_matrix)
+    T = ot.emd(a, b, cost_matrix, numItermax=5000000)
     
     col_ind = np.argmax(T, axis=1)
     row_ind = np.arange(N)
@@ -87,6 +62,7 @@ def main():
     z_clusters = [Z[labels == i].cpu() for i in range(num_charts)]
     torch.save(z_clusters, os.path.join(args.data_dir, "z_clusters.pt"))
 
+    # 3. Solve local continuous velocity fields
     time_grid = torch.linspace(0, 1.0 - 1e-5, args.time_steps)
     print(f"Solving {num_charts} local systems batched across {args.time_steps} time steps...")
     

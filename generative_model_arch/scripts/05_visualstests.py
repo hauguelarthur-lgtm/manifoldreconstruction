@@ -44,6 +44,13 @@ def compute_swd(X: torch.Tensor, Y: torch.Tensor, num_projections: int = 1000) -
     Computes the Sliced-Wasserstein Distance (SWD).
     Projects p-dimensional data onto random 1D hyper-spherical vectors.
     """
+    N_X, N_Y = X.shape[0], Y.shape[0]
+    if N_X != N_Y:
+        min_N = min(N_X, N_Y)
+        X = X[torch.randperm(N_X, device=X.device)[:min_N]]
+        Y = Y[torch.randperm(N_Y, device=Y.device)[:min_N]]
+    # ------------------------------
+    
     p = X.shape[1]
     
     # Generate random projection vectors uniformly on the unit sphere S^{p-1}
@@ -94,6 +101,7 @@ def visualize_topology(X: np.ndarray, Y: np.ndarray, method: str, output_path: s
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
+    plt.close(fig)
     print(f"Visualization saved to {output_path}")
 
 def main():
