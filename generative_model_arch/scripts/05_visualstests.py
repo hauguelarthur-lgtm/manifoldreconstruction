@@ -39,7 +39,7 @@ def compute_mmd(X: torch.Tensor, Y: torch.Tensor, gamma: float = 1.0) -> float:
     mmd_squared = K_XX + K_YY - 2 * K_XY
     return float(torch.sqrt(torch.clamp(mmd_squared, min=1e-8)))
 
-def compute_swd(X: torch.Tensor, Y: torch.Tensor, num_projections: int = 1000) -> float:
+def compute_swd(X: torch.Tensor, Y: torch.Tensor, num_projections: int = 5000) -> float:
     """
     Computes the Sliced-Wasserstein Distance (SWD).
     Projects p-dimensional data onto random 1D hyper-spherical vectors.

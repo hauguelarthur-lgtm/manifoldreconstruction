@@ -32,11 +32,9 @@ def generate_samples(X_0: torch.Tensor,
         etas_t = precomputed_etas[step] 
         t_val = t.item()
         
-        # 1. Dynamic topological barycenters tracking the continuous linear flow
-        centers_t = (1.0 - t_val) * centers_0 + t_val * centers_1
         
         feature_grads = compute_feature_gradients(model, X_t)
-        b_t = compute_global_drift(X_t, feature_grads, etas_t, centers_t, precisions=cluster_precisions)
+        b_t = compute_global_drift(X_t, feature_grads, etas_t, centers_1, precisions=cluster_precisions)
         
         drift_norms = torch.norm(b_t, dim=1, keepdim=True)
         b_t = b_t * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
@@ -61,9 +59,17 @@ def generate_samples(X_0: torch.Tensor,
             D_t_star = compute_optimal_diffusion(t_val)
             D_t_tensor = torch.tensor(D_t_star, device=device)
             
+            # 1. Algebraic Score Mapping
             s_t = (t_val * b_t - X_t) / max(1.0 - t_val, 1e-8)
+            
+            # 2. Formulate total drift
             full_drift = b_t + D_t_tensor * s_t
             
+            # 3. CORRECTED: Clamp the entire resultant drift vector
+            drift_norms = torch.norm(full_drift, dim=1, keepdim=True)
+            full_drift = full_drift * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
+            
+            # 4. Integrate
             dW = torch.randn_like(X_t) * torch.sqrt(dt_tensor)
             X_t = X_t + full_drift * dt + torch.sqrt(2 * D_t_tensor) * dW
 
