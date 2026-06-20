@@ -39,14 +39,18 @@ def main():
     # Load R^k specific topological artifacts
     cluster_centers_k = torch.load(os.path.join(args.data_dir, "cluster_centers_k.pt"), map_location=device)
     cluster_precisions_k = torch.load(os.path.join(args.data_dir, "cluster_precisions_k.pt"), map_location=device)
+    
     data_k = torch.load(os.path.join(args.data_dir, "data_k.pt"), map_location=device)
-
     num_charts = int(labels.max().item() + 1)
+    
+    # Extract the distinct initial and terminal barycenters
+    centers_1 = torch.stack([data_k[labels == i].mean(dim=0) for i in range(num_charts)]).to(device)
+    centers_0 = torch.stack([z_clusters[i].mean(dim=0) for i in range(num_charts)]).to(device)
+
     chart_counts = torch.bincount(labels, minlength=num_charts).float()
     chart_probs = chart_counts / chart_counts.sum()
     chart_assignments = torch.multinomial(chart_probs, args.num_samples, replacement=True).to(device)
 
-    # 2. Initialize spatial boundaries exclusively in R^k
     X_0 = torch.zeros(args.num_samples, k, device=device)
     for i in range(num_charts):
         mask = (chart_assignments == i)
@@ -55,20 +59,21 @@ def main():
         
         Z_i = z_clusters[i].to(device)
         rand_idx = torch.randint(0, Z_i.size(0), (n_samples_i,), device=device)
-        X_0[mask] = Z_i[rand_idx] + torch.randn_like(Z_i[rand_idx]) * 1e-4
+        # Initialize directly on the discrete optimal transport prior
+        X_0[mask] = Z_i[rand_idx] 
 
     model = TruncatedBesovWaveletMap(k, args.intrinsic_dim, args.p_trunc).to(device)
     model.calibrate(data_k)
     
     mode_str = "ODE (Deterministic)" if args.ode_mode else "SDE (Stochastic)"
     print(f"Initializing {mode_str} Integration for {args.num_samples} samples in R^{k} on {device}...")
-
-    # 3. Execute Integration in R^k
+    
     generated_data_k = generate_samples(
         X_0=X_0,
         model=model,
         precomputed_etas=precomputed_etas,
-        cluster_centers=cluster_centers_k,
+        centers_0=centers_0,
+        centers_1=centers_1,
         cluster_precisions=cluster_precisions_k,
         num_samples=args.num_samples,
         ambient_dim=k,
@@ -77,9 +82,8 @@ def main():
         ode_mode=args.ode_mode
     )
 
-    # 4. Apply Inverse Affine Transformation (R^k -> R^16)
     print(f"Lifting generated coordinates from R^{k} to ambient R^{projector.mean.shape[1]}...")
-    generated_data = projector.inverse_transform(generated_data_k)
+    generated_data = projector.inverse_transform(generated_data_k.cpu()).to(device)
 
     torch.save(generated_data, os.path.join(args.data_dir, "generated_samples.pt"))
 

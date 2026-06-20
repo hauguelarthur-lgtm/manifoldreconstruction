@@ -1,51 +1,38 @@
 import torch
 
 def compute_smooth_partition_of_unity(x: torch.Tensor, 
-                                      centers: torch.Tensor, 
+                                      centers_t: torch.Tensor, 
                                       precisions: torch.Tensor = None,
                                       length_scale: float = 1.0) -> torch.Tensor:
-    """
-    Computes \rho_i(x) \in \mathcal{H}_C^{\beta+1} utilizing the Mahalanobis distance.
-    Ensures \sum \rho_i(x) = 1 across all charts.
-    """
-    batch_size, p = x.shape
-    m = centers.shape[0]
+    batch_size, k_dim = x.shape
+    m = centers_t.shape[0]
     
     if precisions is None:
-        # Fallback to isotropic Euclidean distance
-        distances_sq = torch.cdist(x, centers) ** 2
+        distances_sq = torch.cdist(x, centers_t) ** 2
     else:
-        # Compute squared Mahalanobis distance for each chart: 
-        # D_i^2(x) = (x - \mu_i)^T \Sigma_i^{-1} (x - \mu_i)
         distances_sq = torch.zeros(batch_size, m, device=x.device)
         for i in range(m):
-            delta = x - centers[i]  # Broadcasting (B, p) - (p,) -> (B, p)
-            # Efficient batched quadratic form computation
+            delta = x - centers_t[i] 
             dist_i = torch.sum(torch.matmul(delta, precisions[i]) * delta, dim=1)
             distances_sq[:, i] = dist_i
 
-    # Evaluate the Gaussian RBF logits
-    k_effective = x.shape[1]
-    adjusted_length_scale = length_scale * torch.sqrt(torch.tensor(k_effective, dtype=torch.float32))
+    # Scale logits invariant to intrinsic dimension k to prevent softmax hard-saturation
+    adjusted_scale = length_scale * torch.sqrt(torch.tensor(k_dim, dtype=torch.float32, device=x.device))
+    logits = -distances_sq / (2 * adjusted_scale ** 2)
     
-    logits = -distances_sq / (2 * adjusted_length_scale ** 2)
-    weights = torch.softmax(logits, dim=1)
-    return weights
+    return torch.softmax(logits, dim=1)
 
 def compute_global_drift(x: torch.Tensor, 
                          feature_grads: torch.Tensor, 
                          local_etas: list, 
-                         centers: torch.Tensor,
+                         centers_t: torch.Tensor,
                          precisions: torch.Tensor = None) -> torch.Tensor:
-    """
-    Executes the convex combination of local velocity fields.
-    Equation: \hat{b}_t(x) = \sum_{i=1}^m \rho_i(x) ( \nabla\phi_i(x)^\top \eta_t^{(i)} )
-    """
-    batch_size, p = x.shape
-    m = centers.shape[0]
     
-    weights = compute_smooth_partition_of_unity(x, centers, precisions) 
-    global_b_t = torch.zeros(batch_size, p, device=x.device)
+    batch_size, k_dim = x.shape
+    m = centers_t.shape[0]
+    
+    weights = compute_smooth_partition_of_unity(x, centers_t, precisions) 
+    global_b_t = torch.zeros(batch_size, k_dim, device=x.device)
     
     for i in range(m):
         eta_i = local_etas[i]
