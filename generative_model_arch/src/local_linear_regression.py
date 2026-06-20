@@ -15,7 +15,11 @@ def solve_local_system(feature_grads: torch.Tensor, target_vectors: torch.Tensor
     gram = torch.matmul(phi_matrix.t(), phi_matrix)
     
     # Inject strict Tikhonov regularization to enforce positive-definiteness
-    gram += torch.eye(P, device=phi_matrix.device) * reg
+    # Extract structural scale
+    trace_scale = torch.trace(gram) / P
+    
+    # Inject invariant Tikhonov regularization
+    gram += torch.eye(P, device=phi_matrix.device) * (reg * trace_scale + 1e-6)
     
     # Compute the right-hand side projected vector
     rhs = torch.matmul(phi_matrix.t(), target)

@@ -26,8 +26,6 @@ def main():
     args = parser.parse_args()
 
     # Create output directory if it doesn't exist
-
-    # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Load raw empirical data: A ~ \mu^*

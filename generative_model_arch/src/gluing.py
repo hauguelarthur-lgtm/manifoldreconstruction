@@ -25,11 +25,11 @@ def compute_smooth_partition_of_unity(x: torch.Tensor,
             distances_sq[:, i] = dist_i
 
     # Evaluate the Gaussian RBF logits
-    logits = -distances_sq / (2 * length_scale ** 2)
+    k_effective = x.shape[1]
+    adjusted_length_scale = length_scale * torch.sqrt(torch.tensor(k_effective, dtype=torch.float32))
     
-    # Softmax strictly enforces the partition of unity property: \sum \rho_i(x) = 1
+    logits = -distances_sq / (2 * adjusted_length_scale ** 2)
     weights = torch.softmax(logits, dim=1)
-    
     return weights
 
 def compute_global_drift(x: torch.Tensor, 
