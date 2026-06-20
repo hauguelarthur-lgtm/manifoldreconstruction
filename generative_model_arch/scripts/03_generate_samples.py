@@ -48,14 +48,6 @@ def main():
     centers_0 = torch.stack([z_clusters[i].mean(dim=0) for i in range(num_charts)]).to(device)
 
     X_0 = torch.zeros(args.num_samples, k, device=device)
-    for i in range(num_charts):
-        mask = (chart_assignments == i)
-        n_samples_i = mask.sum().item()
-        if n_samples_i == 0: continue
-        
-        Z_i = z_clusters[i].to(device)
-        rand_idx = torch.randint(0, Z_i.size(0), (n_samples_i,), device=device)
-        X_0[mask] = Z_i[rand_idx] + torch.randn_like(Z_i[rand_idx]) * 1e-4
 
     model = TruncatedBesovWaveletMap(k, args.intrinsic_dim, args.p_trunc).to(device)
     model.calibrate(data_k)
