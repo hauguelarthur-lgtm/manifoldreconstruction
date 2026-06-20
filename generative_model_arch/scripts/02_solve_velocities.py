@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--ambient_dim", type=int, default=16)
     parser.add_argument("--intrinsic_dim", type=int, default=4)
     parser.add_argument("--p_trunc", type=int, default=1024) # Matched feature capacity
-    parser.add_argument("--time_steps", type=int, default=500) # Matched precision
+    parser.add_argument("--time_steps", type=int, default=200) # Matched precision
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
