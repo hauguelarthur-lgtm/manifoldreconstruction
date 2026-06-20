@@ -4,66 +4,24 @@ import argparse
 import yaml
 import numpy as np
 
-
-def generate_klein_bottle(n_samples: int, ambient_dim: int) -> torch.Tensor:
+def apply_isometric_embedding(data: torch.Tensor, ambient_dim: int) -> torch.Tensor:
     """
-    Generates a 2D Klein Bottle embedded in a 4D ambient space.
-    Requires ambient_dim >= 4.
+    Entangles a locally-spanned manifold across the full ambient space R^p 
+    via a random orthogonal transformation SO(p), strictly preserving intrinsic geodesics.
     """
-    if ambient_dim < 4:
-        raise ValueError("Klein Bottle embedding requires an ambient dimension 'p' of at least 4.")
+    # 1. Sample from the standard normal to establish a rotation basis
+    H = torch.randn(ambient_dim, ambient_dim)
     
-    u = torch.rand(n_samples) * 2 * torch.pi
-    v = torch.rand(n_samples) * 2 * torch.pi
+    # 2. Extract orthogonal matrix Q via QR factorization (samples from the Haar measure on O(p))
+    Q, R = torch.linalg.qr(H)
     
-    R, r = 2.0, 1.0
+    # 3. Enforce the Special Orthogonal SO(p) constraint (det(Q) = 1) 
+    # This prevents orientation-reversing reflections that alter topological handedness.
+    D = torch.diag(torch.sign(torch.diag(R)))
+    Q = torch.matmul(Q, D)
     
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, 0] = (R + r * torch.cos(v)) * torch.cos(u)
-    data[:, 1] = (R + r * torch.cos(v)) * torch.sin(u)
-    data[:, 2] = r * torch.sin(v) * torch.cos(u / 2)
-    data[:, 3] = r * torch.sin(v) * torch.sin(u / 2)
-    
-    return data
-
-def generate_swiss_roll(n_samples: int, ambient_dim: int) -> torch.Tensor:
-    """
-    Generates a 2D Swiss Roll embedded in a 3D ambient space.
-    Requires ambient_dim >= 3.
-    """
-    if ambient_dim < 3:
-        raise ValueError("Swiss Roll embedding requires an ambient dimension 'p' of at least 3.")
-        
-    # t controls the spiral angle/radius, y controls the height
-    t = (torch.rand(n_samples) * 3 * torch.pi) + 1.5 * torch.pi
-    y = torch.rand(n_samples) * 21.0
-    
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, 0] = t * torch.cos(t)
-    data[:, 1] = y
-    data[:, 2] = t * torch.sin(t)
-    
-    return data
-
-
-def generate_n_sphere(n_samples: int, intrinsic_dim: int, ambient_dim: int) -> torch.Tensor:
-    """
-    Generates a uniformly sampled d-dimensional hypersphere embedded in a p-dimensional space.
-    Requires ambient_dim >= intrinsic_dim + 1.
-    """
-    if ambient_dim < intrinsic_dim + 1:
-        raise ValueError("Ambient dimension 'p' must be at least d + 1 for an S^d sphere.")
-        
-    # Sample from standard normal distribution N(0, I_{d+1})
-    gaussian_samples = torch.randn(n_samples, intrinsic_dim + 1)
-    
-    # Project onto the unit hypersphere via L2 normalization
-    spherical_samples = gaussian_samples / torch.norm(gaussian_samples, dim=1, keepdim=True)
-    
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, :intrinsic_dim + 1] = spherical_samples
-    
-    return data
+    # 4. Apply global isometric rotation
+    return torch.matmul(data, Q)
 
 def generate_nonlinear_manifold(n_samples: int, intrinsic_dim: int, ambient_dim: int) -> torch.Tensor:
     if ambient_dim < intrinsic_dim * 3:
@@ -91,7 +49,7 @@ def generate_analytical_sphere(n_samples: int, ambient_dim: int) -> torch.Tensor
     data[:, 2] = z
     return data
 
-def generate_analytical_torus(n_samples: int, ambient_dim: int, R: float = 2.0, r: float = 0.5) -> torch.Tensor:
+def generate_analytical_torus(n_samples: int, ambient_dim: int, R: float = 2.0, r: float = 1.0) -> torch.Tensor:
     samples = []
     while len(samples) < n_samples:
         theta = torch.rand(n_samples) * 2 * np.pi
@@ -108,6 +66,39 @@ def generate_analytical_torus(n_samples: int, ambient_dim: int, R: float = 2.0, 
                 samples.append([x, y, z])
     data = torch.zeros(n_samples, ambient_dim)
     data[:, :3] = torch.tensor(samples, dtype=torch.float32)
+    return data
+
+def generate_klein_bottle(n_samples: int, ambient_dim: int) -> torch.Tensor:
+    if ambient_dim < 4:
+        raise ValueError("Klein Bottle embedding requires an ambient dimension 'p' of at least 4.")
+    u = torch.rand(n_samples) * 2 * torch.pi
+    v = torch.rand(n_samples) * 2 * torch.pi
+    R, r = 2.0, 1.0
+    data = torch.zeros(n_samples, ambient_dim)
+    data[:, 0] = (R + r * torch.cos(v)) * torch.cos(u)
+    data[:, 1] = (R + r * torch.cos(v)) * torch.sin(u)
+    data[:, 2] = r * torch.sin(v) * torch.cos(u / 2)
+    data[:, 3] = r * torch.sin(v) * torch.sin(u / 2)
+    return data
+
+def generate_swiss_roll(n_samples: int, ambient_dim: int) -> torch.Tensor:
+    if ambient_dim < 3:
+        raise ValueError("Swiss Roll embedding requires an ambient dimension 'p' of at least 3.")
+    t = (torch.rand(n_samples) * 3 * torch.pi) + 1.5 * torch.pi
+    y = torch.rand(n_samples) * 21.0
+    data = torch.zeros(n_samples, ambient_dim)
+    data[:, 0] = t * torch.cos(t)
+    data[:, 1] = y
+    data[:, 2] = t * torch.sin(t)
+    return data
+
+def generate_n_sphere(n_samples: int, intrinsic_dim: int, ambient_dim: int) -> torch.Tensor:
+    if ambient_dim < intrinsic_dim + 1:
+        raise ValueError("Ambient dimension 'p' must be at least d + 1 for an S^d sphere.")
+    gaussian_samples = torch.randn(n_samples, intrinsic_dim + 1)
+    spherical_samples = gaussian_samples / torch.norm(gaussian_samples, dim=1, keepdim=True)
+    data = torch.zeros(n_samples, ambient_dim)
+    data[:, :intrinsic_dim + 1] = spherical_samples
     return data
 
 def main():
@@ -138,6 +129,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Generating empirical dataset: Topology={args.topology.upper()}, N={N}, Ambient Dim={p}")
     
+    # 1. Topological mapping
     if args.topology == 'sphere':
         data = generate_analytical_sphere(N, p)
     elif args.topology == 'torus':
@@ -151,6 +143,12 @@ def main():
     else:
         data = generate_nonlinear_manifold(N, d, p)
     
+    # 2. Subspace entangling
+    if args.topology in ['sphere', 'torus', 'klein', 'swiss_roll', 'n_sphere']:
+        print(f"Applying SO({p}) isometric transformation to entangle ambient coordinates...")
+        data = apply_isometric_embedding(data, p)
+    
+    # 3. Serialization
     output_path = os.path.join(args.output_dir, "dataset.pt")
     torch.save(data, output_path)
     print(f"Empirical data tensor saved to {output_path}")

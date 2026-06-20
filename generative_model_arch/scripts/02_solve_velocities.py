@@ -33,6 +33,8 @@ def main():
     num_charts = int(labels.max().item() + 1)
 
     model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc).to(device)
+    print("Calibrating Random Fourier Features via median distance heuristic...")
+    model.calibrate(data)
     model.eval()
 
     print("Computing Exact L2 Optimal Transport matching (Linear Sum Assignment)...")
@@ -48,7 +50,7 @@ def main():
     z_clusters = [Z[labels == i].cpu() for i in range(num_charts)]
     torch.save(z_clusters, os.path.join(args.data_dir, "z_clusters.pt"))
 
-    time_grid = torch.linspace(0, 1.0, args.time_steps)
+    time_grid = torch.linspace(0, 1.0- 1e-5, args.time_steps)
     all_etas = []
 
     # Replaces the sequential loop over time_grid

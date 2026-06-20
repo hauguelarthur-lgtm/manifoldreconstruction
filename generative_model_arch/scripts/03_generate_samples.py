@@ -56,15 +56,19 @@ def main():
         X_0[mask] = Z_i[rand_idx] + torch.randn_like(Z_i[rand_idx]) * 1e-4
 
     model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc).to(device)
+    target_data = torch.load(os.path.join(args.data_dir, "data.pt"), map_location=device)
+    model.calibrate(target_data)
     
     mode_str = "ODE (Deterministic)" if args.ode_mode else "SDE (Stochastic)"
     print(f"Initializing {mode_str} Integration for {args.num_samples} samples on {device}...")
-    
+    cluster_precisions = torch.load(os.path.join(args.data_dir, "cluster_precisions.pt"), map_location=device)
+
     generated_data = generate_samples(
         X_0=X_0,
         model=model,
         precomputed_etas=precomputed_etas,
         cluster_centers=cluster_centers,
+        cluster_precisions=cluster_precisions,
         num_samples=args.num_samples,
         ambient_dim=args.ambient_dim,
         num_time_steps=args.time_steps,

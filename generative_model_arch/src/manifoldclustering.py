@@ -15,11 +15,29 @@ def partition_data(data: torch.Tensor, num_charts: int, random_state: int = 42) 
     labels_np = clustering.fit_predict(data_np)
     labels = torch.tensor(labels_np, dtype=torch.long, device=data.device)
     
-    # Compute empirical Euclidean barycenters for downstream references
+    p = data.shape[1]
     centers = []
+    precisions = []
+    
+    # Compute empirical Euclidean barycenters and Anisotropic Precision Matrices
     for i in range(num_charts):
         mask = (labels == i)
-        centers.append(data[mask].mean(dim=0))
+        chart_data = data[mask]
+        
+        mu = chart_data.mean(dim=0)
+        centers.append(mu)
+        
+        # Compute empirical covariance matrix
+        centered_data = chart_data - mu
+        cov = torch.matmul(centered_data.T, centered_data) / (chart_data.size(0) - 1)
+        
+        # Inject Tikhonov stabilization to guarantee invertibility of the zero-subspace
+        reg_cov = cov + torch.eye(p, device=data.device) * 1e-4
+        
+        # Precision matrix is the inverse of the covariance matrix
+        precisions.append(torch.linalg.inv(reg_cov))
+        
     cluster_centers = torch.stack(centers)
+    cluster_precisions = torch.stack(precisions)
     
-    return labels, cluster_centers
+    return labels, cluster_centers, cluster_precisions

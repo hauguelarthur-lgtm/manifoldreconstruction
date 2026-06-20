@@ -7,6 +7,7 @@ def generate_samples(X_0: torch.Tensor,
                      model: torch.nn.Module,
                      precomputed_etas: list, 
                      cluster_centers: torch.Tensor,
+                     cluster_precisions:torch.Tensor,
                      num_samples: int, 
                      ambient_dim: int, 
                      num_time_steps: int = 500,
@@ -21,7 +22,7 @@ def generate_samples(X_0: torch.Tensor,
     
     epsilon_num = 1e-3
     dt = (1.0 - epsilon_num) / (num_time_steps - 1)
-    time_grid = torch.linspace(0, 1.0 - epsilon_num, num_time_steps)
+    time_grid = torch.linspace(0, 1.0 - 1e-5, num_time_steps)
     max_drift = 15.0
 
     for step, t in enumerate(time_grid):
@@ -30,7 +31,7 @@ def generate_samples(X_0: torch.Tensor,
         
         # Predictor Drift Computation
         feature_grads = compute_feature_gradients(model, X_t)
-        b_t = compute_global_drift(X_t, feature_grads, etas_t, cluster_centers)
+        b_t = compute_global_drift(X_t, feature_grads, etas_t, cluster_centers, precisions=cluster_precisions)
         
         drift_norms = torch.norm(b_t, dim=1, keepdim=True)
         b_t = b_t * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
@@ -41,7 +42,7 @@ def generate_samples(X_0: torch.Tensor,
             if step < len(time_grid) - 1:
                 etas_t_next = precomputed_etas[step + 1]
                 feature_grads_next = compute_feature_gradients(model, X_pred)
-                b_t_next = compute_global_drift(X_pred, feature_grads_next, etas_t_next, cluster_centers)
+                b_t_next = compute_global_drift(X_pred, feature_grads_next, etas_t_next, cluster_centers, precisions=cluster_precisions)
                 
                 drift_norms_next = torch.norm(b_t_next, dim=1, keepdim=True)
                 b_t_next = b_t_next * torch.clamp(max_drift / (drift_norms_next + 1e-8), max=1.0)
@@ -63,7 +64,7 @@ def generate_samples(X_0: torch.Tensor,
                 for _ in range(corrector_steps):
                     # Recompute gradient at the stochastically perturbed state
                     grad_corr = compute_feature_gradients(model, X_t)
-                    b_corr = compute_global_drift(X_t, grad_corr, etas_t, cluster_centers)
+                    b_corr = compute_global_drift(X_t, grad_corr, etas_t, cluster_centers, precisions=cluster_precisions)
                     
                     # Compute signal-to-noise ratio-based step size
                     noise_norm = torch.randn_like(X_t)

@@ -39,11 +39,12 @@ def main():
         data = torch.randn(5000, 16) # N=5000, p=16
 
     print(f"Partitioning data into {args.num_charts} topological charts...")
-    labels, cluster_centers = partition_data(data, num_charts=args.num_charts)
+    labels, cluster_centers, cluster_precisions = partition_data(data, num_charts=args.num_charts)
 
     torch.save(data, os.path.join(args.output_dir, "data.pt"))
     torch.save(labels, os.path.join(args.output_dir, "labels.pt"))
     torch.save(cluster_centers, os.path.join(args.output_dir, "cluster_centers.pt"))
+    torch.save(cluster_precisions, os.path.join(args.output_dir, "cluster_precisions.pt"))
     print(f"Clustering complete. Artifacts saved to {args.output_dir}.")
 
 if __name__ == "__main__":
