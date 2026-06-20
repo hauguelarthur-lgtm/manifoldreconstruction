@@ -16,15 +16,15 @@ if project_root not in sys.path:
 
 from src.wavelet_map import TruncatedBesovWaveletMap, compute_feature_gradients
 from src.local_linear_regression import solve_local_system
+from src.projector import GlobalSubspaceProjector
 
 def main():
     default_data_dir = os.path.join(project_root, "data", "processed")
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default=default_data_dir)
-    parser.add_argument("--ambient_dim", type=int, default=16)
     parser.add_argument("--intrinsic_dim", type=int, default=4)
-    parser.add_argument("--p_trunc", type=int, default=1024) # Matched feature capacity
-    parser.add_argument("--time_steps", type=int, default=200) # Matched precision
+    parser.add_argument("--p_trunc", type=int, default=1024)
+    parser.add_argument("--time_steps", type=int, default=200)
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -33,28 +33,51 @@ def main():
     labels = torch.load(os.path.join(args.data_dir, "labels.pt")).to(device)
     num_charts = int(labels.max().item() + 1)
 
-    model = TruncatedBesovWaveletMap(args.ambient_dim, args.intrinsic_dim, args.p_trunc).to(device)
+    # 1. Execute SVD Global Subspace Truncation
+    projector = GlobalSubspaceProjector(variance_threshold=0.999)
+    data_k = projector.fit_transform(data)
+    k = projector.k
+    
+    torch.save(projector, os.path.join(args.data_dir, "projector.pt"))
+    torch.save(data_k, os.path.join(args.data_dir, "data_k.pt"))
+
+    # 2. Recompute Euclidean barycenters and Precision matrices strictly in R^k
+    centers_k = []
+    precisions_k = []
+    for i in range(num_charts):
+        mask = (labels == i)
+        chart_data = data_k[mask]
+        
+        mu = chart_data.mean(dim=0)
+        centers_k.append(mu)
+        
+        centered = chart_data - mu
+        dof = max(chart_data.size(0) - 1, 1)
+        cov = torch.matmul(centered.T, centered) / dof
+        
+        # Pseudo-inverse to isolate local tangent spaces within R^k
+        precisions_k.append(torch.linalg.pinv(cov, rcond=1e-3))
+
+    torch.save(torch.stack(centers_k), os.path.join(args.data_dir, "cluster_centers_k.pt"))
+    torch.save(torch.stack(precisions_k), os.path.join(args.data_dir, "cluster_precisions_k.pt"))
+
+    # 3. Initialize model in the reduced dimension k
+    model = TruncatedBesovWaveletMap(k, args.intrinsic_dim, args.p_trunc).to(device)
     print("Calibrating Random Fourier Features via median distance heuristic...")
-    model.calibrate(data)
+    model.calibrate(data_k)
     model.eval()
 
-    print("Computing Exact L2 Optimal Transport matching (POT EMD)...")
-    Z_raw = torch.randn_like(data)
+    # 4. Compute Exact Optimal Transport in R^k
+    print(f"Computing Exact L2 Optimal Transport matching (POT EMD) in R^{k}...")
+    Z_raw = torch.randn_like(data_k)
     
-    # Define uniform marginal distributions for the source and target
     N = Z_raw.shape[0]
     a = np.ones(N) / N
     b = np.ones(N) / N
     
-    # Compute the full 16-dimensional squared Euclidean cost matrix
-    cost_matrix = cdist(Z_raw.cpu().numpy(), data.cpu().numpy(), metric='sqeuclidean')
-    
-    # Execute POT's exact Earth Mover's Distance (C-backend Network Simplex)
-    # T is the optimal transport plan (N x N matrix)
+    cost_matrix = cdist(Z_raw.cpu().numpy(), data_k.cpu().numpy(), metric='sqeuclidean')
     T = ot.emd(a, b, cost_matrix)
     
-    # Extract the strict 1-to-1 permutation indices
-    # T contains exactly one non-zero entry (1/N) per row for unweighted bijections
     col_ind = np.argmax(T, axis=1)
     row_ind = np.arange(N)
     
@@ -64,25 +87,15 @@ def main():
     z_clusters = [Z[labels == i].cpu() for i in range(num_charts)]
     torch.save(z_clusters, os.path.join(args.data_dir, "z_clusters.pt"))
 
-    time_grid = torch.linspace(0, 1.0- 1e-5, args.time_steps)
-    all_etas = []
-
-    # Replaces the sequential loop over time_grid
+    time_grid = torch.linspace(0, 1.0 - 1e-5, args.time_steps)
     print(f"Solving {num_charts} local systems batched across {args.time_steps} time steps...")
     
-    # Precompute time grid tensors (T, 1, 1) for broadcasting
     t_tensor = time_grid.view(-1, 1, 1).to(device)
-    
-    # Batch computation of the interpolant trajectories
-    # I_t_batch shape: (T, N, p)
-    I_t_batch = (1.0 - t_tensor) * Z.unsqueeze(0) + t_tensor * data.unsqueeze(0)
-    
-    # The derivative is constant across time for the standard interpolant
-    dot_I_t = data - Z
+    I_t_batch = (1.0 - t_tensor) * Z.unsqueeze(0) + t_tensor * data_k.unsqueeze(0)
+    dot_I_t = data_k - Z
     
     all_etas = []
     
-    # Iterate over time steps (still sequential, but operations inside are faster)
     for step in range(args.time_steps):
         eta_t_local = []
         I_t = I_t_batch[step]
