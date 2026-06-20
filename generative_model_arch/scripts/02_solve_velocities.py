@@ -4,6 +4,7 @@ import sys
 import argparse
 import ot
 from scipy.spatial.distance import cdist
+import numpy as np
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(script_dir) == "scripts":
@@ -37,12 +38,25 @@ def main():
     model.calibrate(data)
     model.eval()
 
-    print("Computing Exact L2 Optimal Transport matching (Linear Sum Assignment)...")
+    print("Computing Exact L2 Optimal Transport matching (POT EMD)...")
     Z_raw = torch.randn_like(data)
     
-    # STRICT CORRECTION: Exact OT eliminates crossed trajectories.
+    # Define uniform marginal distributions for the source and target
+    N = Z_raw.shape[0]
+    a = np.ones(N) / N
+    b = np.ones(N) / N
+    
+    # Compute the full 16-dimensional squared Euclidean cost matrix
     cost_matrix = cdist(Z_raw.cpu().numpy(), data.cpu().numpy(), metric='sqeuclidean')
-    row_ind, col_ind = ot.emd_1d(Z_raw[:, 0].cpu().numpy(), data[:, 0].cpu().numpy())
+    
+    # Execute POT's exact Earth Mover's Distance (C-backend Network Simplex)
+    # T is the optimal transport plan (N x N matrix)
+    T = ot.emd(a, b, cost_matrix)
+    
+    # Extract the strict 1-to-1 permutation indices
+    # T contains exactly one non-zero entry (1/N) per row for unweighted bijections
+    col_ind = np.argmax(T, axis=1)
+    row_ind = np.arange(N)
     
     Z = torch.zeros_like(Z_raw)
     Z[col_ind] = Z_raw[row_ind]
