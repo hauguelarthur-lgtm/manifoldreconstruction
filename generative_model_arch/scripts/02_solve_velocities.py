@@ -48,7 +48,7 @@ def main():
     z_clusters = [Z[labels == i].cpu() for i in range(num_charts)]
     torch.save(z_clusters, os.path.join(args.data_dir, "z_clusters.pt"))
 
-    time_grid = torch.linspace(0, 1.0 - 1e-3, args.time_steps)
+    time_grid = torch.linspace(0, 1.0, args.time_steps)
     all_etas = []
 
     # Replaces the sequential loop over time_grid

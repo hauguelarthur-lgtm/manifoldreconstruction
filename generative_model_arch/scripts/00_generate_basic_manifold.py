@@ -4,6 +4,67 @@ import argparse
 import yaml
 import numpy as np
 
+
+def generate_klein_bottle(n_samples: int, ambient_dim: int) -> torch.Tensor:
+    """
+    Generates a 2D Klein Bottle embedded in a 4D ambient space.
+    Requires ambient_dim >= 4.
+    """
+    if ambient_dim < 4:
+        raise ValueError("Klein Bottle embedding requires an ambient dimension 'p' of at least 4.")
+    
+    u = torch.rand(n_samples) * 2 * torch.pi
+    v = torch.rand(n_samples) * 2 * torch.pi
+    
+    R, r = 2.0, 1.0
+    
+    data = torch.zeros(n_samples, ambient_dim)
+    data[:, 0] = (R + r * torch.cos(v)) * torch.cos(u)
+    data[:, 1] = (R + r * torch.cos(v)) * torch.sin(u)
+    data[:, 2] = r * torch.sin(v) * torch.cos(u / 2)
+    data[:, 3] = r * torch.sin(v) * torch.sin(u / 2)
+    
+    return data
+
+def generate_swiss_roll(n_samples: int, ambient_dim: int) -> torch.Tensor:
+    """
+    Generates a 2D Swiss Roll embedded in a 3D ambient space.
+    Requires ambient_dim >= 3.
+    """
+    if ambient_dim < 3:
+        raise ValueError("Swiss Roll embedding requires an ambient dimension 'p' of at least 3.")
+        
+    # t controls the spiral angle/radius, y controls the height
+    t = (torch.rand(n_samples) * 3 * torch.pi) + 1.5 * torch.pi
+    y = torch.rand(n_samples) * 21.0
+    
+    data = torch.zeros(n_samples, ambient_dim)
+    data[:, 0] = t * torch.cos(t)
+    data[:, 1] = y
+    data[:, 2] = t * torch.sin(t)
+    
+    return data
+
+
+def generate_n_sphere(n_samples: int, intrinsic_dim: int, ambient_dim: int) -> torch.Tensor:
+    """
+    Generates a uniformly sampled d-dimensional hypersphere embedded in a p-dimensional space.
+    Requires ambient_dim >= intrinsic_dim + 1.
+    """
+    if ambient_dim < intrinsic_dim + 1:
+        raise ValueError("Ambient dimension 'p' must be at least d + 1 for an S^d sphere.")
+        
+    # Sample from standard normal distribution N(0, I_{d+1})
+    gaussian_samples = torch.randn(n_samples, intrinsic_dim + 1)
+    
+    # Project onto the unit hypersphere via L2 normalization
+    spherical_samples = gaussian_samples / torch.norm(gaussian_samples, dim=1, keepdim=True)
+    
+    data = torch.zeros(n_samples, ambient_dim)
+    data[:, :intrinsic_dim + 1] = spherical_samples
+    
+    return data
+
 def generate_nonlinear_manifold(n_samples: int, intrinsic_dim: int, ambient_dim: int) -> torch.Tensor:
     if ambient_dim < intrinsic_dim * 3:
         raise ValueError("Ambient dimension 'p' must be at least 3x intrinsic dimension 'd'.")
@@ -62,7 +123,9 @@ def main():
     parser = argparse.ArgumentParser(description="Generates synthetic manifold data.")
     parser.add_argument("--config", type=str, default=default_config_path)
     parser.add_argument("--output_dir", type=str, default=default_output_dir)
-    parser.add_argument("--topology", type=str, choices=['default', 'sphere', 'torus'], default='default')
+    parser.add_argument("--topology", type=str, 
+                        choices=['default', 'sphere', 'torus', 'klein', 'swiss_roll', 'n_sphere'], 
+                        default='default')
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
@@ -79,6 +142,12 @@ def main():
         data = generate_analytical_sphere(N, p)
     elif args.topology == 'torus':
         data = generate_analytical_torus(N, p)
+    elif args.topology == 'klein':
+        data = generate_klein_bottle(N, p)
+    elif args.topology == 'swiss_roll':
+        data = generate_swiss_roll(N, p)
+    elif args.topology == 'n_sphere':
+        data = generate_n_sphere(N, d, p)
     else:
         data = generate_nonlinear_manifold(N, d, p)
     
