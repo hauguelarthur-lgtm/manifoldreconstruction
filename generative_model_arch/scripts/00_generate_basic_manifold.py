@@ -159,6 +159,7 @@ def main():
     
     # 3. Serialization
     output_path = os.path.join(args.output_dir, "dataset.pt")
+    data = data - data.mean(dim=0) # Add this BEFORE saving
     torch.save(data, output_path)
     print(f"Empirical data tensor saved to {output_path}")
 
