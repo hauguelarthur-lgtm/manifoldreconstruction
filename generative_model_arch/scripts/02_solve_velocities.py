@@ -53,7 +53,7 @@ def main():
         cost_matrix_i = torch.cdist(Z_raw_i, U_i, p=2)**2
         
         # Solve Earth Mover's Distance
-        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy(), numItermax=5000)
+        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy(), numItermax=50000)
         col_ind_i = np.argmax(plan_i, axis=1)
         
         # Formulate exact 1-to-1 sorted intrinsic latents

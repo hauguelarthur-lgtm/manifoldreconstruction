@@ -7,6 +7,8 @@ def solve_local_system(features: torch.Tensor,
     Solves Kernel Ridge Regression for general, non-irrotational vector fields (arXiv:2602.20070).
     System: \Phi^\top \Phi \eta = \Phi^\top Y  --> Solves for \eta \in R^{P \times d}.
     """
+    v_norms = target_velocities.norm(dim=1, keepdim=True) + 1e-8
+    target_normalized = target_velocities / v_norms
     P = features.shape[1]
     
     # Gram matrix G \in R^{P \times P}

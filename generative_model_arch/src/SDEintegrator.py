@@ -34,7 +34,6 @@ def generate_samples(Z_0_list: list,
             eta_t_i = precomputed_etas[step][i].to(device)
             features = model(U_t)                  # (Batch, P)
             b_t = torch.matmul(features, eta_t_i)  # (Batch, d)
-
             if ode_mode:
                 drift_norms = torch.norm(b_t, dim=1, keepdim=True)
                 b_t_clamped = b_t * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
@@ -49,6 +48,7 @@ def generate_samples(Z_0_list: list,
                 
                 dW = torch.randn_like(U_t) * torch.sqrt(dt_tensor)
                 U_t_list[i] = U_t + full_drift * dt + sqrt_2D * dW
+        print(f"Mean Drift Norm: {b_t.norm(dim=1).mean()}")
 
     # Terminal Epsilon Boundary Step
     for i in range(num_charts):

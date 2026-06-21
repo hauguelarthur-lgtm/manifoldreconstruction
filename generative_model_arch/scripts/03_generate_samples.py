@@ -62,6 +62,7 @@ def main():
     Z_0_list = []
     for i in range(m):
         z_i = z_clusters[i].to(device)
+        print(f"Chart {i} Prior Mean: {z_i.mean(dim=0)}")
         # Compute empirical statistics of the training prior for this chart
         mean_i = z_i.mean(dim=0)
         std_i = z_i.std(dim=0)
@@ -70,6 +71,25 @@ def main():
         # Sample inference priors from the same support as training priors
         Z_0_i = torch.normal(mean=mean_i, std=std_i.expand(n_gen_i, d))
         Z_0_list.append(Z_0_i)
+
+
+    '''for i in range(m):
+        z_i = z_clusters[i].to(device)
+        z_min = z_i.min(dim=0).values
+        z_max = z_i.max(dim=0).values
+        mean_i = z_i.mean(dim=0)
+        std_i = z_i.std(dim=0)
+    
+        # 2. Sample and reject out-of-bounds
+        n_gen_i = (chart_assignments == i).sum().item()
+        Z_0_i = torch.normal(mean=mean_i, std=std_i.expand(n_gen_i, d))
+    
+        # Truncate particles that drift into the "dead zone" where vector field is undefined
+        mask = (Z_0_i >= z_min) & (Z_0_i <= z_max)
+        # Force into bounds
+        Z_0_i = torch.clamp(Z_0_i, min=z_min, max=z_max)
+        Z_0_list.append(Z_0_i)'''
+
 
     # 2. Instantiate and Calibrate Besov Wavelet Map
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
@@ -97,6 +117,7 @@ def main():
         mu_i = whitney_atlas[i]['mu'].to(device)
         Q_i = whitney_atlas[i]['Q'].to(device)
         W_i = whitney_atlas[i]['W'].to(device)
+        print(W_i.norm())
         
         U_quad_i = formulate_quadratic_features(U_gen_i)
         

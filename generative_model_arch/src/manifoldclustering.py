@@ -73,6 +73,8 @@ def construct_whitney_atlas(data: torch.Tensor,
         # ---------------------------------------------------------
         # Calculate normal-bundle error residuals: N_err = X_centered - U_i @ Q_i.T
         N_err = centered_X - torch.matmul(U_i, Q_i.T)  # (N_i x p)
+        N_err_std = N_err.std() + 1e-8
+        N_err_norm = N_err / N_err_std
 
         # Generate upper-triangular quadratic outer products of U_i
         # For d=3, generates 6 features: [u1^2, u2^2, u3^2, u1u2, u1u3, u2u3]
@@ -93,10 +95,11 @@ def construct_whitney_atlas(data: torch.Tensor,
         
         # Apply isotropic Tikhonov ridge
         G_reg = G + torch.eye(quad_dim, device=device) * lambda_reg
-        rhs = torch.matmul(U_quad.T, N_err)
+        rhs = torch.matmul(U_quad.T, N_err_norm)
 
         # Solve the well-conditioned system for W_i \in R^{quad_dim x p}
         W_i = torch.linalg.solve(G_reg, rhs)
+        W_i = W_i * N_err_std
 
         atlas_frames.append({
             'mu': mu_i.cpu(), 
