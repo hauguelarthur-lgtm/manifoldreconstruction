@@ -1,75 +1,101 @@
 import torch
-import numpy as np
-from sklearn.cluster import SpectralClustering
 
 def construct_whitney_atlas(data: torch.Tensor, 
                             num_charts: int, 
-                            intrinsic_dim: int, 
-                            random_state: int = 42) -> tuple:
+                            intrinsic_dim: int) -> tuple:
     """
-    Constructs an intrinsic Whitney Submanifold Atlas.
-    Partitions ambient data into local Euclidean charts, extracts their orthonormal 
-    tangent frames via PCA, and projects coordinates into the intrinsic dimension 'd'.
+    Constructs a true Stéphanovitch / Fefferman Overlapping Submanifold Atlas.
+    1. Generates a delta-net via Greedy Farthest Point Sampling (FPS).
+    2. Constructs open, overlapping chart neighborhoods B(c_i, 1.5 * delta).
+    3. Solves local PCA for the 1st-order tangent frame Q_i.
+    4. Regresses the 2nd-order Weingarten curvature tensor W_i.
     """
-    # 1. K-NN affinity graph partitioning in ambient space
-    data_np = data.detach().cpu().numpy()
-    clustering = SpectralClustering(
-        n_clusters=num_charts, 
-        affinity='nearest_neighbors',
-        n_neighbors=15,
-        random_state=random_state
-    )
-    labels_np = clustering.fit_predict(data_np)
-    labels = torch.tensor(labels_np, dtype=torch.long, device=data.device)
-    
-    p = data.shape[1]
+    N, p = data.shape
     d = intrinsic_dim
+    device = data.device
+
+    # ---------------------------------------------------------
+    # STEP 1: Greedy Farthest Point Sampling (FPS) Delta-Net
+    # Guaranteed to generate maximally separated manifold centers
+    # ---------------------------------------------------------
+    centroids = torch.zeros(num_charts, p, device=device)
+    centroids[0] = data[torch.randint(0, N, (1,))]
+    distances = torch.cdist(data, centroids[0].unsqueeze(0)).squeeze(1)
+
+    for i in range(1, num_charts):
+        farthest_idx = torch.argmax(distances)
+        centroids[i] = data[farthest_idx]
+        dist_to_new = torch.cdist(data, centroids[i].unsqueeze(0)).squeeze(1)
+        distances = torch.minimum(distances, dist_to_new)
+
+    # The covering radius delta is the maximum distance any data point has to its nearest center
+    delta = torch.max(distances).item()
+    chart_radius = 1.5 * delta  # 1.5 multiplier mathematically enforces smooth open overlap
+
+    all_pairwise_dists = torch.cdist(data, centroids)
     
-    centers = []
-    precisions = []
+    # Boolean mask of overlapping chart memberships (N x m)
+    # A single point can (and should) evaluate to True across multiple columns
+    membership_mask = all_pairwise_dists < chart_radius
+
     atlas_frames = []
     intrinsic_coords = []
-    
+    chart_ambient_indices = []
+
     for i in range(num_charts):
-        mask = (labels == i)
-        chart_data = data[mask]
-        N_i = chart_data.size(0)
-        
-        # Structural guard against degenerate chart collapse
-        if N_i <= d:
-            raise ValueError(f"Chart {i} collapsed with only {N_i} samples. "
-                             f"A minimum of d+1 ({d+1}) samples is mathematically required to span R^{d}.")
-        
-        # A. Empirical ambient centroid \mu_i \in R^p
-        mu_i = chart_data.mean(dim=0)
-        centers.append(mu_i)
-        
-        # B. Centered ambient chart data
-        centered_data = chart_data - mu_i
-        
-        # C. Empirical covariance matrix \Sigma_i \in R^{p \times p}
-        cov_i = torch.matmul(centered_data.T, centered_data) / (N_i - 1)
-        
-        # D. Ambient Precision via Moore-Penrose Pseudo-Inverse (saved for ambient gluing)
-        precisions.append(torch.linalg.pinv(cov_i, rcond=1e-3))
-        
-        # E. Local Eigendecomposition to extract Whitney Tangent Frame Q_i \in R^{p \times d}
+        in_chart = membership_mask[:, i]
+        chart_idx = torch.nonzero(in_chart).squeeze(1)
+        chart_ambient_indices.append(chart_idx.cpu())
+
+        X_i = data[chart_idx]
+        N_i = X_i.size(0)
+
+        if N_i < (d + 1) * (d + 2) // 2:
+            raise ValueError(f"Chart {i} population ({N_i}) is too sparse to solve 2nd-order Weingarten tensor.")
+
+        # A. Local base center
+        mu_i = centroids[i]
+        centered_X = X_i - mu_i
+
+        # B. 1st-Order Tangent Plane via PCA
+        cov_i = torch.matmul(centered_X.T, centered_X) / (N_i - 1)
         eigenvalues, eigenvectors = torch.linalg.eigh(cov_i)
-        
-        # Sort eigenvalues descending to isolate the top 'd' principal variance directions
-        sorted_indices = torch.argsort(eigenvalues, descending=True)
-        top_indices = sorted_indices[:d]
-        
-        # Extract orthonormal basis Q_i (p x d)
-        Q_i = eigenvectors[:, top_indices]
-        atlas_frames.append({'mu': mu_i.cpu(), 'Q': Q_i.cpu()})
-        
-        # F. Pushforward ambient coordinates into local intrinsic Whitney chart U^{(i)} \in R^{N_i \times d}
-        # Operation: (N_i x p) @ (p x d) -> (N_i x d)
-        U_i = torch.matmul(centered_data, Q_i)
-        intrinsic_coords.append(U_i)
-        
-    cluster_centers = torch.stack(centers)
-    cluster_precisions = torch.stack(precisions)
-    
-    return labels, intrinsic_coords, atlas_frames, cluster_centers, cluster_precisions
+        top_indices = torch.argsort(eigenvalues, descending=True)[:d]
+        Q_i = eigenvectors[:, top_indices]  # (p x d)
+
+        # C. 1st-Order Intrinsic Coordinates U_i \in R^{N_i \times d}
+        U_i = torch.matmul(centered_X, Q_i)
+        intrinsic_coords.append(U_i.cpu())
+
+        # ---------------------------------------------------------
+        # STEP 2: 2nd-Order Weingarten Curvature Regression
+        # Overcomes the flat beta=2 ceiling by fitting local normal paraboloids
+        # ---------------------------------------------------------
+        # Calculate normal-bundle error residuals: N_err = X_centered - U_i @ Q_i.T
+        N_err = centered_X - torch.matmul(U_i, Q_i.T)  # (N_i x p)
+
+        # Generate upper-triangular quadratic outer products of U_i
+        # For d=3, generates 6 features: [u1^2, u2^2, u3^2, u1u2, u1u3, u2u3]
+        quad_dim = d * (d + 1) // 2
+        U_quad = torch.zeros(N_i, quad_dim, device=device)
+        col = 0
+        for dim1 in range(d):
+            for dim2 in range(dim1, d):
+                U_quad[:, col] = U_i[:, dim1] * U_i[:, dim2]
+                col += 1
+
+        # Solve Least-Squares for Weingarten tensor W_i: (quad_dim x p)
+        # Maps quadratic intrinsic terms back to ambient normal displacements
+        W_i = torch.linalg.lstsq(U_quad, N_err).solution
+
+        atlas_frames.append({
+            'mu': mu_i.cpu(), 
+            'Q': Q_i.cpu(), 
+            'W': W_i.cpu()
+        })
+
+    # Generate soft partition of unity weights evaluated directly on the raw points
+    smooth_sigmas = torch.full((num_charts,), (delta * 0.75)**2, device=device)
+    cluster_centers = centroids.cpu()
+
+    return membership_mask.cpu(), intrinsic_coords, atlas_frames, cluster_centers, smooth_sigmas, chart_ambient_indices

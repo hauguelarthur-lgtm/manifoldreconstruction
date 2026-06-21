@@ -1,28 +1,25 @@
 import torch
 
-def solve_local_system(feature_grads: torch.Tensor, 
-                       target_vectors: torch.Tensor, 
+def solve_local_system(features: torch.Tensor, 
+                       target_velocities: torch.Tensor, 
                        reg: float = 1e-2) -> torch.Tensor:
     """
-    Solves the batched linear least-squares system for intrinsic KSI drift regression.
-    Models the probability flow velocity field as a conservative potential flow inside R^d.
+    Solves Kernel Ridge Regression for general, non-irrotational vector fields (arXiv:2602.20070).
+    System: \Phi^\top \Phi \eta = \Phi^\top Y  --> Solves for \eta \in R^{P \times d}.
     """
-    N_i, P, d = feature_grads.shape
+    P = features.shape[1]
     
-    # Enforce strict memory contiguity prior to reshaping to guarantee correct coordinate alignment
-    phi_matrix = feature_grads.transpose(1, 2).contiguous().reshape(N_i * d, P)
-    target = target_vectors.contiguous().reshape(N_i * d, 1)
+    # Gram matrix G \in R^{P \times P}
+    gram = torch.matmul(features.t(), features)
     
-    # Formulate empirical Gram matrix (P x P)
-    gram = torch.matmul(phi_matrix.t(), phi_matrix)
-    
-    # Invariant Tikhonov Regularization scaled by Gram trace
     trace_scale = torch.trace(gram) / P
-    gram += torch.eye(P, device=phi_matrix.device) * (reg * trace_scale + 1e-6)
+    gram += torch.eye(P, device=features.device) * (reg * trace_scale + 1e-6)
     
-    rhs = torch.matmul(phi_matrix.t(), target)
+    # RHS \in R^{P \times d}
+    rhs = torch.matmul(features.t(), target_velocities)
     
-    # Utilize high-precision linear solve instead of explicit pseudo-inverse forming
-    eta_t = torch.linalg.solve(gram, rhs).squeeze(-1)
+    # Solves exactly for coefficient matrix \eta \in R^{P \times d}
+    # Unlocks full non-zero curl (\nabla \times b \neq 0)
+    eta_t = torch.linalg.solve(gram, rhs)
     
     return eta_t

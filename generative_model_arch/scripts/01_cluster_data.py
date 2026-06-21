@@ -45,28 +45,29 @@ def main():
     print(f"Executing Intrinsic Whitney Atlas Construction: m={args.num_charts}, d={d}...")
 
     # 3. Execute Whitney Submanifold Decomposition
-    (labels, 
+# In scripts/01_cluster_data.py, update the execution and saving block:
+
+    (membership_mask, 
      chart_intrinsic_coords, 
      whitney_atlas, 
      cluster_centers, 
-     cluster_precisions) = construct_whitney_atlas(
+     smooth_sigmas,
+     chart_ambient_indices) = construct_whitney_atlas(
         data=data_ambient,
         num_charts=args.num_charts,
         intrinsic_dim=d
     )
 
-    # 4. Serialize artifacts strictly to the processed directory
-    # Tensors are cast to CPU prior to disk I/O to prevent CUDA memory pinning leaks
     torch.save(data_ambient.cpu(), os.path.join(args.output_dir, "data.pt"))
-    torch.save(labels.cpu(), os.path.join(args.output_dir, "labels.pt"))
-    torch.save([u.cpu() for u in chart_intrinsic_coords], os.path.join(args.output_dir, "chart_intrinsic_coords.pt"))
+    torch.save(membership_mask, os.path.join(args.output_dir, "membership_mask.pt"))
+    torch.save(chart_intrinsic_coords, os.path.join(args.output_dir, "chart_intrinsic_coords.pt"))
     torch.save(whitney_atlas, os.path.join(args.output_dir, "whitney_atlas.pt"))
-    torch.save(cluster_centers.cpu(), os.path.join(args.output_dir, "cluster_centers.pt"))
-    torch.save(cluster_precisions.cpu(), os.path.join(args.output_dir, "cluster_precisions.pt"))
+    torch.save(cluster_centers, os.path.join(args.output_dir, "cluster_centers.pt"))
+    torch.save(smooth_sigmas.cpu(), os.path.join(args.output_dir, "smooth_sigmas.pt"))
+    torch.save(chart_ambient_indices, os.path.join(args.output_dir, "chart_ambient_indices.pt"))
 
     print(f"\nPhase 1 Complete. Serialized artifacts to {args.output_dir}:")
     print(f" ├── data.pt                    (Ambient Ground Truth, {data_ambient.shape})")
-    print(f" ├── labels.pt                  (Chart assignments, {labels.shape})")
     print(f" ├── chart_intrinsic_coords.pt  (List of {len(chart_intrinsic_coords)} intrinsic tensors in R^{d})")
     print(f" ├── whitney_atlas.pt           (List of {len(whitney_atlas)} Whitney tangent frames [mu_i, Q_i])")
     print(f" ├── cluster_centers.pt         (Ambient chart centroids in R^{data_ambient.shape[1]})")

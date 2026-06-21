@@ -4,71 +4,56 @@ import numpy as np
 
 class TruncatedBesovWaveletMap(nn.Module):
     """
-    Multi-Scale Random Fourier Features (Truncated Besov Wavelet Map).
-    Parameterizes the scaling space across multiple frequency bandwidths 
-    natively inside the intrinsic dimension 'd'.
+    True Besov Wavelet Map (arXiv:2506.19587).
+    Uses Multiscale Dyadic Cauchy sampling to generate heavy-tailed frequencies,
+    spanning the adaptive Besov space B_{p,q}^\beta inside intrinsic dimension 'd'.
     """
     def __init__(self, ambient_dim: int, intrinsic_dim: int, p_truncation: int):
         super().__init__()
-        # For Phase 3 intrinsic regression, ambient_dim == intrinsic_dim == d
-        self.p = ambient_dim      
         self.d = intrinsic_dim
         self.P = p_truncation
         
-        # Isolate random generator state to prevent global seed collapse
         gen = torch.Generator()
         gen.manual_seed(42)
         
-        self.omega = nn.Parameter(torch.randn(self.P, self.p, generator=gen), requires_grad=False)
+        self.omega = nn.Parameter(torch.zeros(self.P, self.d), requires_grad=False)
         self.bias = nn.Parameter(torch.rand(self.P, generator=gen) * 2 * np.pi, requires_grad=False)
         self.scale = float(np.sqrt(2.0 / self.P))
 
-    def calibrate(self, x: torch.Tensor, subsample: int = 2000):
+    def calibrate(self, x: torch.Tensor, base_beta: float = 1.5):
         """
-        Dynamically calibrates frequency bandwidths using the median pairwise 
-        distance heuristic of the empirical intrinsic coordinates.
+        Calibrates heavy-tailed dyadic Cauchy scales to match Besov regularity \beta.
         """
         with torch.no_grad():
-            N = x.size(0)
-            if N > subsample:
-                indices = torch.randperm(N, device=x.device)[:subsample]
-                x_sub = x[indices]
-            else:
-                x_sub = x
-            
-            distances = torch.pdist(x_sub, p=2)
-            
+            distances = torch.pdist(x[:2000], p=2)
             median_dist = torch.median(distances).item()
-            if median_dist <= 1e-8:
-                median_dist = 1.0  
+            base_freq = 1.0 / max(median_dist, 1e-4)
             
-            base_freq = 1.0 / median_dist
-            
-            # Distribute basis functions across dyadic frequency scales
-            scales = [base_freq * 0.5, base_freq, base_freq * 2.0]
-            p_per_scale = self.P // len(scales)
+            # Dyadic multiscale decomposition (j = 0, 1, 2, 3)
+            dyadic_multipliers = [0.5, 1.0, 2.0, 4.0]
+            p_per_dyad = self.P // len(dyadic_multipliers)
             
             omegas = []
-            for scale in scales:
-                w = torch.randn(p_per_scale, self.p, device=x.device) * (scale / np.sqrt(self.p))
-                omegas.append(w)
+            for mult in dyadic_multipliers:
+                scale_j = base_freq * mult
+                # Heavy-tailed Cauchy generation: N(0,1) / N(0,1)
+                cauchy_weights = torch.randn(p_per_dyad, self.d, device=x.device) / \
+                                (torch.randn(p_per_dyad, 1, device=x.device).abs() + 1e-5)
                 
-            if self.P % len(scales) != 0:
-                rem = self.P % len(scales)
-                omegas.append(torch.randn(rem, self.p, device=x.device) * (base_freq / np.sqrt(self.p)))
+                # Attenuate magnitude of high frequencies based on Besov smoothness \beta
+                weights_j = cauchy_weights * (scale_j * (mult ** (-base_beta)))
+                omegas.append(weights_j)
+                
+            if self.P % len(dyadic_multipliers) != 0:
+                rem = self.P % len(dyadic_multipliers)
+                omegas.append(torch.randn(rem, self.d, device=x.device) * base_freq)
                 
             self.omega.copy_(torch.cat(omegas, dim=0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Returns standard scalar feature activations \phi(x) of shape (Batch, P).
+        EXACT CORRECTION: The Jacobian gradient extraction proxy has been deleted.
+        """
         projection = torch.matmul(x, self.omega.T) + self.bias
         return self.scale * torch.cos(projection)
-
-def compute_feature_gradients(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
-    """
-    Computes exact analytical Jacobian feature gradients \nabla\phi(x).
-    Returns tensor of shape (Batch, P, d).
-    """
-    projection = torch.matmul(x, model.omega.T) + model.bias
-    S = -model.scale * torch.sin(projection)
-    grads = S.unsqueeze(-1) * model.omega.unsqueeze(0)
-    return grads
