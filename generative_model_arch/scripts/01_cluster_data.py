@@ -23,9 +23,13 @@ def main():
     parser.add_argument("--data_path", type=str, default=default_data_path)
     parser.add_argument("--output_dir", type=str, default=default_output_dir)
     parser.add_argument("--config", type=str, default=default_config_path)
-    parser.add_argument("--num_charts", type=int, default=10)
     args = parser.parse_args()
 
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+    d = config['manifold']['intrinsic_dim']
+    num_charts= config['geometry']['num_charts']
+    
     os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -37,12 +41,10 @@ def main():
     data_ambient = torch.load(args.data_path, map_location=device)
     
     # 2. Extract intrinsic dimension 'd' from config
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
-    d = config['manifold']['intrinsic_dim']
+
 
     print(f"Loaded ambient tensor: Shape {data_ambient.shape} on {device}")
-    print(f"Executing Intrinsic Whitney Atlas Construction: m={args.num_charts}, d={d}...")
+    print(f"Executing Intrinsic Whitney Atlas Construction: m={num_charts}, d={d}...")
 
     # 3. Execute Whitney Submanifold Decomposition
 # In scripts/01_cluster_data.py, update the execution and saving block:
@@ -54,7 +56,7 @@ def main():
      smooth_sigmas,
      chart_ambient_indices) = construct_whitney_atlas(
         data=data_ambient,
-        num_charts=args.num_charts,
+        num_charts=num_charts,
         intrinsic_dim=d
     )
 

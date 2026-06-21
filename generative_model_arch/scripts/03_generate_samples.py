@@ -29,9 +29,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default=os.path.join(project_root, "data", "processed"))
     parser.add_argument("--config", type=str, default=os.path.join(project_root, "configs", "default_config.yaml"))
-    parser.add_argument("--num_samples", type=int, default=5000)
-    parser.add_argument("--p_trunc", type=int, default=1024)
-    parser.add_argument("--time_steps", type=int, default=200)
     parser.add_argument("--ode_mode", action="store_true")
     parser.add_argument("--blend_ambient", action="store_true", default=False)
     args = parser.parse_args()
@@ -41,6 +38,9 @@ def main():
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     d = config['manifold']['intrinsic_dim']
+    num_samples=config['manifold']['num_samples']
+    p_trunc=config['features']['p_trunc']
+    time_steps=config['integration']['time_steps']
 
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location=device)
@@ -57,7 +57,7 @@ def main():
     chart_probs = chart_counts / chart_counts.sum()
     
     torch.manual_seed(42)
-    chart_assignments = torch.multinomial(chart_probs, args.num_samples, replacement=True)
+    chart_assignments = torch.multinomial(chart_probs, num_samples, replacement=True)
 
     Z_0_list = []
     for i in range(m):
@@ -65,7 +65,7 @@ def main():
         Z_0_list.append(torch.randn((n_gen_i, d), device=device))
 
     # 2. Instantiate and Calibrate Besov Wavelet Map
-    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=args.p_trunc).to(device)
+    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
     model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
 
     print(f"Executing Chart-Decoupled Intrinsic SDE Integration in R^{d}...")
@@ -73,7 +73,7 @@ def main():
         Z_0_list=Z_0_list,
         model=model,
         precomputed_etas=precomputed_etas,
-        num_time_steps=args.time_steps,
+        num_time_steps=time_steps,
         device=device,
         ode_mode=args.ode_mode
     )

@@ -11,9 +11,9 @@ geometry:
   regularity: 2.0       # beta: Assumed structural smoothness of the manifold
 
 features:
-  p_trunc: 64           # P: Truncation limit for the wavelet expansion. 
+  p_trunc: 1024           # P: Truncation limit for the wavelet expansion. 
                         # Theoretically scaled as P ~ n^{d/(2\beta+d)}
 
 integration:
   time_steps: 200        # Discretization resolution for the SDE integration
-  num_gen_samples: 1000 # Number of synthetic samples to generate during inference
+  num_gen_samples: 5000 # Number of synthetic samples to generate during inference
