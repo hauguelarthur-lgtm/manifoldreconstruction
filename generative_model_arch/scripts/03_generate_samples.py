@@ -43,8 +43,6 @@ def main():
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"), map_location=device)
     
     m = len(whitney_atlas)
-    
-    # Defensive contract check: Ensures Stage 02 fully populated the prior list
     if len(z_clusters_intrinsic) != m:
         raise RuntimeError(f"Fatal Desync: whitney_atlas contains {m} charts, but z_clusters_intrinsic "
                            f"contains {len(z_clusters_intrinsic)} slices. Re-execute scripts/02_solve_velocities.py.")
@@ -52,24 +50,32 @@ def main():
     chart_probs = membership_mask.sum(dim=0).float() / membership_mask.sum()
     chart_assignments = torch.multinomial(chart_probs, num_samples, replacement=True)
 
-    # Support-Confined KDE Prior Sampling
+    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
+    
+    # CRITICAL MATHEMATICAL FIX 2: Load the exact calibrated wavelet state from Stage 02
+    wavelet_map_path = os.path.join(args.data_dir, "wavelet_map.pt")
+    if not os.path.exists(wavelet_map_path):
+        raise FileNotFoundError(f"Fatal: {wavelet_map_path} missing. Re-run scripts/02_solve_velocities.py.")
+    model.load_state_dict(torch.load(wavelet_map_path, map_location=device))
+    print("Successfully synchronized Besov wavelet feature map with Stage 02 ground truth.")
+
+    # CRITICAL MATHEMATICAL FIX 3: Support-Confined Continuous Gaussian Prior Sampling
+    # Matches Phase 2 marginal variance while clamping strictly to the trained RKHS domain.
     Z_0_list = []
     for i in range(m):
         Z_train_i = z_clusters_intrinsic[i]
         n_gen_i = int((chart_assignments == i).sum().item())
         
         if Z_train_i.shape[0] > 0:
-            idx = torch.randint(0, Z_train_i.shape[0], (n_gen_i,), device=device)
-            base_anchors = Z_train_i[idx]
+            std_U_i = Z_train_i.std(dim=0, keepdim=True).to(device) if Z_train_i.shape[0] > 1 else torch.ones((1, d), device=device)
+            z_min = Z_train_i.min(dim=0).values.to(device)
+            z_max = Z_train_i.max(dim=0).values.to(device)
             
-            kde_bandwidth = (Z_train_i.std(dim=0, keepdim=True) + 1e-6) * 0.05
-            jitter = torch.randn((n_gen_i, d), device=device) * kde_bandwidth
-            Z_0_list.append(base_anchors + jitter)
+            Z_0_raw = torch.randn((n_gen_i, d), device=device) * std_U_i
+            Z_0_clamped = torch.clamp(Z_0_raw, min=z_min, max=z_max)
+            Z_0_list.append(Z_0_clamped)
         else:
             Z_0_list.append(torch.zeros((n_gen_i, d), device=device))
-
-    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
-    model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
 
     print(f"Executing Calibrated RKHS Intrinsic Integration in R^{d}...")
     U_gen_list = generate_samples(Z_0_list, model, precomputed_etas, time_steps, device, args.ode_mode)

@@ -44,7 +44,6 @@ def main():
         std_U_i = U_i.std(dim=0, keepdim=True).to(device) if N_i > 1 else torch.ones((1, d), device=device)
         Z_raw_i = torch.randn((N_i, d), device=device) * std_U_i
 
-        # EXACT CORRECTION: Declares cost_matrix_i explicitly before invoking Earth Mover's Distance
         cost_matrix_i = torch.cdist(Z_raw_i, U_i, p=2)**2
         plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy(), numItermax=1000000)
         
@@ -56,6 +55,11 @@ def main():
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
     model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
     model.eval()
+
+    # CRITICAL MATHEMATICAL FIX 1: Serialize the calibrated wavelet frequencies and biases
+    # Prevents Stage 03 from evaluating vector fields against re-randomized white noise.
+    torch.save(model.state_dict(), os.path.join(args.data_dir, "wavelet_map.pt"))
+    print("Serialized calibrated Besov wavelet map state -> wavelet_map.pt")
 
     time_grid = torch.linspace(0, 1.0 - 1e-5, time_steps)
     all_etas = []
