@@ -2,18 +2,15 @@
 # regularity (beta), number of charts (m), num_time_steps.
 # Hyperparameters for Minimax-Optimal KSI Pipeline
 manifold:
-  ambient_dim: 16       # p: Dimension of the ambient space
-  intrinsic_dim: 2      # d: Estimated intrinsic dimension of the manifold
-  num_samples: 5000     # N: Number of empirical data points to generate/use
+  ambient_dim: 16       # Ambient embedding space R^p
+  intrinsic_dim: 2      # Strict Riemannian surface dimension d=2
+  num_samples: 5000     # Sample complexity N (Sweep across [1000, 2000, 5000, 10000])
 
 geometry:
-  num_charts: 3.0      # m: Number of localized Euclidean patches for clustering
-  regularity: 2.0      # beta: Assumed structural smoothness of the manifold
+  num_charts: 64        # CRITICAL: Must be sufficiently large (64-128) to guarantee localized differential covering nets (\delta \ll diam(M))
 
 features:
-  p_trunc: 1024           # P: Truncation limit for the wavelet expansion. 
-                        # Theoretically scaled as P ~ n^{d/(2\beta+d)}
+  p_trunc: 256          # Littlewood-Paley Besov frequency truncation ladder P
 
 integration:
-  time_steps: 200        # Discretization resolution for the SDE integration
-  num_gen_samples: 5000 # Number of synthetic samples to generate during inference
+  time_steps: 200

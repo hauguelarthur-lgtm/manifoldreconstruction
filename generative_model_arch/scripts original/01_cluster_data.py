@@ -3,7 +3,6 @@ import os
 import sys
 import argparse
 import yaml
-import time
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "scripts" else script_dir
@@ -12,7 +11,6 @@ sys.path.insert(0, project_root) if project_root not in sys.path else None
 from src.manifoldclustering import construct_whitney_atlas
 
 def main():
-    print("[DEBUG] Starting execution of scripts/01_cluster_data.py")
     default_data_path = os.path.join(project_root, "data", "raw", "dataset.pt")
     default_output_dir = os.path.join(project_root, "data", "processed")
     default_config_path = os.path.join(project_root, "configs", "default_config.yaml")
@@ -25,15 +23,9 @@ def main():
 
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
-    d = int(config['manifold']['intrinsic_dim'])
+    d = config['manifold']['intrinsic_dim']
+    num_charts = config['geometry']['num_charts']
     
-    # Ingest raw config value: handle integers, floats, or 'auto' strings cleanly
-    raw_num_charts = config['geometry']['num_charts']
-    if str(raw_num_charts).strip().lower() in ['auto', 'none', '0']:
-        num_charts_arg = 'auto'
-    else:
-        num_charts_arg = int(float(raw_num_charts))
-        
     os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -42,29 +34,32 @@ def main():
                                 f"Execute scripts/00_generate_basic_manifold.py first.")
     
     data_ambient = torch.load(args.data_path, map_location=device)
-    print(f"[DEBUG] Loaded ambient dataset tensor: Shape {data_ambient.shape} on {device}")
     
-    t_atlas = time.time()
+    print(f"Loaded ambient tensor: Shape {data_ambient.shape} on {device}")
+    print(f"Executing Intrinsic Whitney Atlas Construction: m={num_charts}, d={d}...")
+
+    # Strictly unpacks the 4 active artifacts returned by construct_whitney_atlas
     (membership_mask, 
      chart_intrinsic_coords, 
      whitney_atlas, 
      chart_ambient_indices) = construct_whitney_atlas(
         data=data_ambient,
-        intrinsic_dim=d,
-        num_charts=num_charts_arg,
-        target_beta=1.5,
-        packing_multiplier=3.0
+        num_charts=num_charts,
+        intrinsic_dim=d
     )
-    print(f"[DEBUG] Atlas construction successfully completed in {time.time() - t_atlas:.4f}s")
 
-    print("[DEBUG] Serializing processed artifacts to disk...")
     torch.save(data_ambient.cpu(), os.path.join(args.output_dir, "data.pt"))
     torch.save(membership_mask, os.path.join(args.output_dir, "membership_mask.pt"))
     torch.save(chart_intrinsic_coords, os.path.join(args.output_dir, "chart_intrinsic_coords.pt"))
     torch.save(whitney_atlas, os.path.join(args.output_dir, "whitney_atlas.pt"))
     torch.save(chart_ambient_indices, os.path.join(args.output_dir, "chart_ambient_indices.pt"))
 
-    print(f"\nPhase 1 Complete. Serialized exact artifacts to {args.output_dir}.")
+    print(f"\nPhase 1 Complete. Serialized exact artifacts to {args.output_dir}:")
+    print(f" ├── data.pt                    (Ambient Ground Truth, {data_ambient.shape})")
+    print(f" ├── membership_mask.pt         (Overlapping chart assignments, {membership_mask.shape})")
+    print(f" ├── chart_intrinsic_coords.pt  (List of {len(chart_intrinsic_coords)} intrinsic tensors in R^{d})")
+    print(f" ├── whitney_atlas.pt           (List of {len(whitney_atlas)} Whitney tangent frames [mu_i, Q_i, W_i])")
+    print(f" └── chart_ambient_indices.pt   (List of ambient index mappings per chart)")
 
 if __name__ == "__main__":
     main()

@@ -1,35 +1,20 @@
 import torch
-import math
 
 def construct_whitney_atlas(data: torch.Tensor, 
-                            intrinsic_dim: int,
-                            num_charts: int = None,
-                            target_beta: float = 1.5,
-                            packing_multiplier: float = 3.0) -> tuple:
+                            num_charts: int, 
+                            intrinsic_dim: int) -> tuple:
     """
     Constructs a true Stéphanovitch Overlapping Submanifold Atlas (arXiv:2506.19587).
-    Enforces automated non-parametric minimax chart cardinality determination:
-    m* \asymp N^(d / (2\beta + d)) whenever num_charts is omitted or set to 'auto'.
+    EXACT CORRECTION: Explicitly casts num_charts to int to prevent YAML float allocation crashes.
     """
     N, p = data.shape
     d = int(intrinsic_dim)
+    m = int(num_charts)
     device = data.device
-
-    # Automated Minimax Chart Cardinality Determination (arXiv:2506.19587)
-    if num_charts is None or num_charts == 'auto' or num_charts <= 0:
-        minimax_exponent = float(d) / (2.0 * target_beta + float(d))
-        m_optimal = packing_multiplier * math.pow(N, minimax_exponent)
-        m = max(int(math.ceil(m_optimal)), d + 2)
-        print(f"[DEBUG] Automated Minimax Chart Determination: Ingested N={N}, d={d}, \beta={target_beta}")
-        print(f"[DEBUG] Evaluated Optimal Chart Cardinality m* = {m} (Packing multiplier={packing_multiplier})")
-    else:
-        m = int(num_charts)
-        print(f"[DEBUG] Manual Chart Cardinality Override: m = {m}")
 
     # STEP 1: Greedy Farthest Point Sampling Delta-Net
     fps_centers = torch.zeros(m, p, device=device)
-    first_idx = torch.randint(0, N, (1,))
-    fps_centers[0] = data[first_idx]
+    fps_centers[0] = data[torch.randint(0, N, (1,))]
     distances = torch.cdist(data, fps_centers[0].unsqueeze(0)).squeeze(1)
 
     for i in range(1, m):
@@ -40,7 +25,6 @@ def construct_whitney_atlas(data: torch.Tensor,
 
     delta = torch.max(distances).item()
     chart_radius = 1.5 * delta  
-    print(f"[DEBUG] Minimax-calibrated covering radius \delta={delta:.4f}, Open overlap chart_radius={chart_radius:.4f}")
 
     all_pairwise_dists = torch.cdist(data, fps_centers)
     membership_mask = all_pairwise_dists < chart_radius
@@ -103,6 +87,8 @@ def construct_whitney_atlas(data: torch.Tensor,
         
         # Paraboloid Intercept Shift Centering
         mu_i_star = mu_i - torch.matmul(U_quad_mean.squeeze(0), W_i)
+
+        print(f"Chart {i:02d} Weingarten Curvature Norm ||W_i||: {W_i.norm().item():.4f}")
 
         atlas_frames.append({
             'mu': mu_i_star.cpu(), 
