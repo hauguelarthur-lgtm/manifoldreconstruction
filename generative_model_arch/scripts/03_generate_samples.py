@@ -33,7 +33,7 @@ def main():
     parser.add_argument("--p_trunc", type=int, default=1024)
     parser.add_argument("--time_steps", type=int, default=200)
     parser.add_argument("--ode_mode", action="store_true")
-    parser.add_argument("--blend_ambient", action="store_true", default=True)
+    parser.add_argument("--blend_ambient", action="store_true", default=False)
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
