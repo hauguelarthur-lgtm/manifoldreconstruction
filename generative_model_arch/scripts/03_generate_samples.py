@@ -1,4 +1,3 @@
-import math
 import torch
 import os
 import sys
@@ -25,7 +24,7 @@ def formulate_quadratic_features(U: torch.Tensor) -> torch.Tensor:
     return U_quad
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Executes Intrinsic SDE Flow and 2nd-Order Weingarten Lift.")
     parser.add_argument("--data_dir", type=str, default=os.path.join(project_root, "data", "processed"))
     parser.add_argument("--config", type=str, default=os.path.join(project_root, "configs", "default_config.yaml"))
     parser.add_argument("--ode_mode", action="store_true")
@@ -36,60 +35,30 @@ def main():
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     d = config['manifold']['intrinsic_dim']
-    num_samples=config['manifold']['num_samples']
-    p_trunc=config['features']['p_trunc']
-    time_steps=config['integration']['time_steps']
+    num_samples = config['manifold']['num_samples']
+    p_trunc = config['features']['p_trunc']
+    time_steps = config['integration']['time_steps']
 
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location=device)
     chart_intrinsic_coords = torch.load(os.path.join(args.data_dir, "chart_intrinsic_coords.pt"), map_location=device)
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"), map_location=device)
-    smooth_sigmas = torch.load(os.path.join(args.data_dir, "smooth_sigmas.pt"), map_location='cpu')
     
     m = len(whitney_atlas)
-    # Covering radius r = 1.5 * delta extracted from Phase 1 sigma parameterization
-    covering_radius = math.sqrt(smooth_sigmas[0].item()) * 2.0  
 
-    # 1. Categorical Chart Partitioning of the Generative Batch
+    # 1. Categorical Chart Partitioning
     chart_counts = membership_mask.sum(dim=0).float()
     chart_probs = chart_counts / chart_counts.sum()
     
     torch.manual_seed(42)
     chart_assignments = torch.multinomial(chart_probs, num_samples, replacement=True)
 
-    z_clusters = torch.load(os.path.join(args.data_dir, "z_clusters_intrinsic.pt"), map_location=device)
-    
+    # Sample test batches strictly from standard normal N(0, I_d).
+    # Perfectly matches the Phase 2 independent training priors without empirical drift.
     Z_0_list = []
     for i in range(m):
-        z_i = z_clusters[i].to(device)
-        print(f"Chart {i} Prior Mean: {z_i.mean(dim=0)}")
-        # Compute empirical statistics of the training prior for this chart
-        mean_i = z_i.mean(dim=0)
-        std_i = z_i.std(dim=0)
-        
         n_gen_i = (chart_assignments == i).sum().item()
-        # Sample inference priors from the same support as training priors
-        Z_0_i = torch.normal(mean=mean_i, std=std_i.expand(n_gen_i, d))
-        Z_0_list.append(Z_0_i)
-
-
-    '''for i in range(m):
-        z_i = z_clusters[i].to(device)
-        z_min = z_i.min(dim=0).values
-        z_max = z_i.max(dim=0).values
-        mean_i = z_i.mean(dim=0)
-        std_i = z_i.std(dim=0)
-    
-        # 2. Sample and reject out-of-bounds
-        n_gen_i = (chart_assignments == i).sum().item()
-        Z_0_i = torch.normal(mean=mean_i, std=std_i.expand(n_gen_i, d))
-    
-        # Truncate particles that drift into the "dead zone" where vector field is undefined
-        mask = (Z_0_i >= z_min) & (Z_0_i <= z_max)
-        # Force into bounds
-        Z_0_i = torch.clamp(Z_0_i, min=z_min, max=z_max)
-        Z_0_list.append(Z_0_i)'''
-
+        Z_0_list.append(torch.randn((n_gen_i, d), device=device))
 
     # 2. Instantiate and Calibrate Besov Wavelet Map
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
@@ -120,13 +89,11 @@ def main():
         
         U_quad_i = formulate_quadratic_features(U_gen_i)
         
-        # EXACT CORRECTION: 2nd-Order Lift Formula (arXiv:2506.19587)
-        # X_i = U @ Q.T + U_quad @ W + mu
+        # 2nd-Order Lift: X_i = U @ Q.T + U_quad @ W + mu
         X_lift_i = torch.matmul(U_gen_i, Q_i.T) + torch.matmul(U_quad_i, W_i) + mu_i
         X_lift_list.append(X_lift_i)
 
     X_gen_ambient = torch.cat(X_lift_list, dim=0)
-
 
     output_path = os.path.join(args.data_dir, "generated_samples.pt")
     torch.save(X_gen_ambient.cpu(), output_path)

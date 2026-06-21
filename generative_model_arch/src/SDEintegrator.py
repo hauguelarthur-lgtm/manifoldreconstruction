@@ -9,6 +9,7 @@ def generate_samples(Z_0_list: list,
     """
     Executes Chart-Decoupled Intrinsic Flow Integration inside R^d (arXiv:2602.20070).
     Integrates independent chart batches without invalid tangent bundle mixing.
+    Stripped of console-spamming loop prints and permissive overshoot thresholds.
     """
     num_charts = len(Z_0_list)
     U_t_list = [Z_0.clone().to(device) for Z_0 in Z_0_list]
@@ -16,7 +17,7 @@ def generate_samples(Z_0_list: list,
     
     epsilon_num = 1e-5
     dt = (1.0 - epsilon_num) / (num_time_steps - 1)
-    max_drift = 15.0
+    max_drift = 2.0  # Clamped from 15.0 to prevent ballistic trajectory overshoot
 
     time_grid = torch.linspace(0, 1.0 - epsilon_num, num_time_steps, device=device)
     dt_tensor = torch.tensor(dt, device=device)
@@ -34,6 +35,7 @@ def generate_samples(Z_0_list: list,
             eta_t_i = precomputed_etas[step][i].to(device)
             features = model(U_t)                  # (Batch, P)
             b_t = torch.matmul(features, eta_t_i)  # (Batch, d)
+            
             if ode_mode:
                 drift_norms = torch.norm(b_t, dim=1, keepdim=True)
                 b_t_clamped = b_t * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
@@ -48,7 +50,6 @@ def generate_samples(Z_0_list: list,
                 
                 dW = torch.randn_like(U_t) * torch.sqrt(dt_tensor)
                 U_t_list[i] = U_t + full_drift * dt + sqrt_2D * dW
-        print(f"Mean Drift Norm: {b_t.norm(dim=1).mean()}")
 
     # Terminal Epsilon Boundary Step
     for i in range(num_charts):

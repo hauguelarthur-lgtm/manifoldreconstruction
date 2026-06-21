@@ -4,7 +4,6 @@ import sys
 import argparse
 import ot
 import yaml
-from scipy.spatial.distance import cdist
 import numpy as np
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,7 +30,7 @@ def main():
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location='cpu')
     chart_intrinsic_coords = torch.load(os.path.join(args.data_dir, "chart_intrinsic_coords.pt"), map_location=device)
     
-    N, m = membership_mask.shape
+    m = membership_mask.shape[1]
     d = chart_intrinsic_coords[0].shape[1]
 
     print(f"Executing Chart-Parallel Exact Optimal Transport strictly in R^{d}...")
@@ -46,24 +45,19 @@ def main():
             z_clusters_intrinsic.append(torch.zeros((0, d), device=device))
             continue
 
-        # Draw independent standard normal prior strictly for chart i
         Z_raw_i = torch.randn((N_i, d), device=device)
-        
-        # Evaluate exact squared Euclidean cost matrix on GPU
         cost_matrix_i = torch.cdist(Z_raw_i, U_i, p=2)**2
         
-        # Solve Earth Mover's Distance
-        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy(), numItermax=50000)
+        # Native OT solve without dangerous itermax clamping
+        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy(), numItermax=1000000)
         col_ind_i = np.argmax(plan_i, axis=1)
         
-        # Formulate exact 1-to-1 sorted intrinsic latents
         Z_sorted_i = Z_raw_i[col_ind_i]
         z_clusters_intrinsic.append(Z_sorted_i)
 
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
     print("Serialized synchronized, non-crossing overlapping latents to z_clusters_intrinsic.pt.")
 
-    # Instantiate and calibrate Besov Wavelet Map
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
     model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
     model.eval()
@@ -80,13 +74,14 @@ def main():
             U_i = chart_intrinsic_coords[i]
             Z_i = z_clusters_intrinsic[i]
 
+            if U_i.shape[0] == 0:
+                eta_t_local.append(torch.zeros((p_trunc, d), device=device))
+                continue
+
             I_t_i = (1.0 - t_val) * Z_i + t_val * U_i
             dot_I_t_i = U_i - Z_i
 
-            # Features \phi(x) \in R^{N_i \times P}
             features_i = model(I_t_i)
-            
-            # Solve for coefficient matrix \eta_i \in R^{P \times d}
             eta_i = solve_local_system(features_i, dot_I_t_i)
             eta_t_local.append(eta_i)
 
@@ -95,7 +90,7 @@ def main():
             print(f" Solved step {step + 1}/{time_steps}")
 
     torch.save(all_etas, os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"))
-    print("\nPhase 2 & 3 Complete. Vector fields successfully decoupled from potential flow constraint.")
+    print("\nPhase 2 Complete. Vector fields successfully decoupled from potential flow constraint.")
 
 if __name__ == "__main__":
     main()
