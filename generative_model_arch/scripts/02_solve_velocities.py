@@ -44,10 +44,11 @@ def main():
         std_U_i = U_i.std(dim=0, keepdim=True).to(device) if N_i > 1 else torch.ones((1, d), device=device)
         Z_raw_i = torch.randn((N_i, d), device=device) * std_U_i
 
-        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, (torch.cdist(Z_raw_i, U_i, p=2)**2).cpu().numpy(), numItermax=500000)
+        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, (torch.cdist(Z_raw_i, U_i, p=2)**2).cpu().numpy())
         
-        # Capture exactly sorted training priors for Phase 3 KDE sampling
-        z_clusters_intrinsic.append(Z_raw_i[np.argmax(plan_i, axis=1)])
+        # MATHEMATICAL FIX 1: Column-Wise Argmax (axis=0)
+        # Perfectly synchronizes prior latents to their true OT target partners.
+        z_clusters_intrinsic.append(Z_raw_i[np.argmax(plan_i, axis=0)])
 
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
 

@@ -3,6 +3,11 @@ import torch.nn as nn
 import numpy as np
 
 class TruncatedBesovWaveletMap(nn.Module):
+    """
+    True Besov Wavelet Map (arXiv:2506.19587).
+    EXACT CORRECTION: Bakes dyadic Besov regularity \beta directly into the RKHS 
+    Sobolev penalty diagonal while enforcing hard Cauchy Nyquist clamps.
+    """
     def __init__(self, ambient_dim: int, intrinsic_dim: int, p_truncation: int):
         super().__init__()
         self.d = intrinsic_dim
@@ -30,11 +35,11 @@ class TruncatedBesovWaveletMap(nn.Module):
                 cauchy_raw = torch.randn(p_per_dyad, self.d, device=x.device) / \
                             (torch.randn(p_per_dyad, 1, device=x.device).abs() + 1e-5)
                 
-                # MATHEMATICAL FIX 3: Nyquist Frequency Clamp
-                # Prevents Cauchy outliers from aliasing into pure white noise.
+                # MATHEMATICAL FIX 3: Cauchy Nyquist Aliasing Clamp
                 cauchy_clamped = torch.clamp(cauchy_raw, min=-50.0, max=50.0)
                 omegas.append(cauchy_clamped * (base_freq * mult))
                 
+                # Sobolev RKHS norm penalty scales strictly upwards: (2^j)^(2\beta)
                 penalties.append(torch.full((p_per_dyad,), float(mult ** (2.0 * base_beta)), device=x.device))
                 
             if self.P % len(dyadic_multipliers) != 0:

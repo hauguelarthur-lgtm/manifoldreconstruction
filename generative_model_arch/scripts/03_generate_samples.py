@@ -52,11 +52,9 @@ def main():
         n_gen_i = (chart_assignments == i).sum().item()
         
         if Z_train_i.shape[0] > 0:
-            # Resample training anchors with replacement
             idx = torch.randint(0, Z_train_i.shape[0], (n_gen_i,), device=device)
             base_anchors = Z_train_i[idx]
             
-            # Add continuous Kernel Density smoothing jitter (sigma_kde = 0.05 * std)
             kde_bandwidth = (Z_train_i.std(dim=0, keepdim=True) + 1e-6) * 0.05
             jitter = torch.randn((n_gen_i, d), device=device) * kde_bandwidth
             Z_0_list.append(base_anchors + jitter)

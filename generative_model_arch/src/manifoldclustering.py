@@ -3,10 +3,16 @@ import torch
 def construct_whitney_atlas(data: torch.Tensor, 
                             num_charts: int, 
                             intrinsic_dim: int) -> tuple:
+    """
+    Constructs a true Stéphanovitch Overlapping Submanifold Atlas (arXiv:2506.19587).
+    EXACT CORRECTION: Enforces global isotropic residual standardization and bakes 
+    the paraboloid intercept shift directly into the base centroid \mu_i^*.
+    """
     N, p = data.shape
     d = intrinsic_dim
     device = data.device
 
+    # STEP 1: Greedy Farthest Point Sampling Delta-Net
     fps_centers = torch.zeros(num_charts, p, device=device)
     fps_centers[0] = data[torch.randint(0, N, (1,))]
     distances = torch.cdist(data, fps_centers[0].unsqueeze(0)).squeeze(1)
@@ -17,8 +23,11 @@ def construct_whitney_atlas(data: torch.Tensor,
         dist_to_new = torch.cdist(data, fps_centers[i].unsqueeze(0)).squeeze(1)
         distances = torch.minimum(distances, dist_to_new)
 
-    chart_radius = 1.5 * torch.max(distances).item()
-    membership_mask = torch.cdist(data, fps_centers) < chart_radius
+    delta = torch.max(distances).item()
+    chart_radius = 1.5 * delta  
+
+    all_pairwise_dists = torch.cdist(data, fps_centers)
+    membership_mask = all_pairwise_dists < chart_radius
 
     atlas_frames = []
     intrinsic_coords = []
@@ -36,18 +45,21 @@ def construct_whitney_atlas(data: torch.Tensor,
         if N_i < quad_dim:
             raise ValueError(f"Chart {i} population ({N_i}) is too sparse to solve Weingarten tensor.")
 
+        # Barycentric Centering
         mu_i = X_i.mean(dim=0)
         centered_X = X_i - mu_i
 
+        # 1st-Order Tangent Frame via Local PCA
         cov_i = torch.matmul(centered_X.T, centered_X) / (N_i - 1)
         eigenvalues, eigenvectors = torch.linalg.eigh(cov_i)
-        Q_i = eigenvectors[:, torch.argsort(eigenvalues, descending=True)[:d]]
+        top_indices = torch.argsort(eigenvalues, descending=True)[:d]
+        Q_i = eigenvectors[:, top_indices]  
 
         U_i = torch.matmul(centered_X, Q_i)
         intrinsic_coords.append(U_i.cpu())
 
-        # STEP 2: Weingarten Regression via Global Isotropic Standardization
-        N_err = centered_X - torch.matmul(U_i, Q_i.T)
+        # STEP 2: 2nd-Order Weingarten Curvature Regression
+        N_err = centered_X - torch.matmul(U_i, Q_i.T)  
 
         U_quad = torch.zeros(N_i, quad_dim, device=device)
         col = 0
@@ -61,18 +73,22 @@ def construct_whitney_atlas(data: torch.Tensor,
         U_quad_norm = (U_quad - U_quad_mean) / U_quad_std
 
         # MATHEMATICAL FIX 1: Global Isotropic Residual Standardization
-        # Eliminates zero-division noise amplification on degenerate normal axes.
+        # Prevents zero-division noise blow-up on degenerate normal dimensions.
         global_n_err_std = torch.sqrt(torch.var(N_err, dim=0).mean()) + 1e-6
         N_err_norm = N_err / global_n_err_std
 
         G = torch.matmul(U_quad_norm.T, U_quad_norm)
-        lambda_reg = 1e-4 * (torch.trace(G) / quad_dim) + 1e-7
-        G_reg = G + torch.eye(quad_dim, device=device) * lambda_reg
+        alpha = 1e-4
+        lambda_reg = alpha * (torch.trace(G) / quad_dim) + 1e-7
         
-        W_norm = torch.linalg.solve(G_reg, torch.matmul(U_quad_norm.T, N_err_norm))
-        W_i = (W_norm / U_quad_std.T) * global_n_err_std
+        G_reg = G + torch.eye(quad_dim, device=device) * lambda_reg
+        rhs = torch.matmul(U_quad_norm.T, N_err_norm)
 
-        # MATHEMATICAL FIX 2: Intercept-Shifted Base Centroid \mu_i^*
+        W_norm = torch.linalg.solve(G_reg, rhs)
+        W_i = (W_norm / U_quad_std.T) * global_n_err_std
+        
+        # MATHEMATICAL FIX 2: Paraboloid Intercept Shift Centering
+        # Eliminates the systematic translation gap caused by E[U_quad] > 0.
         mu_i_star = mu_i - torch.matmul(U_quad_mean.squeeze(0), W_i)
 
         print(f"Chart {i:02d} Weingarten Curvature Norm ||W_i||: {W_i.norm().item():.4f}")

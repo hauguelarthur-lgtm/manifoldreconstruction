@@ -4,6 +4,10 @@ def solve_local_system(features: torch.Tensor,
                        target_velocities: torch.Tensor, 
                        rkhs_penalty: torch.Tensor,
                        reg: float = 1e-3) -> torch.Tensor:
+    """
+    Solves Kernel Ridge Regression for general vector fields (arXiv:2602.20070).
+    EXACT CORRECTION: Injects baseline ridge conditioning floor independent of dyadic blocks.
+    """
     P = features.shape[1]
     gram = torch.matmul(features.t(), features)
     
