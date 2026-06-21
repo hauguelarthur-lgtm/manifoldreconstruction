@@ -5,19 +5,19 @@ def construct_whitney_atlas(data: torch.Tensor,
                             intrinsic_dim: int) -> tuple:
     """
     Constructs a true Stéphanovitch Overlapping Submanifold Atlas (arXiv:2506.19587).
-    EXACT CORRECTION: Enforces global isotropic residual standardization and bakes 
-    the paraboloid intercept shift directly into the base centroid \mu_i^*.
+    EXACT CORRECTION: Explicitly casts num_charts to int to prevent YAML float allocation crashes.
     """
     N, p = data.shape
-    d = intrinsic_dim
+    d = int(intrinsic_dim)
+    m = int(num_charts)
     device = data.device
 
     # STEP 1: Greedy Farthest Point Sampling Delta-Net
-    fps_centers = torch.zeros(num_charts, p, device=device)
+    fps_centers = torch.zeros(m, p, device=device)
     fps_centers[0] = data[torch.randint(0, N, (1,))]
     distances = torch.cdist(data, fps_centers[0].unsqueeze(0)).squeeze(1)
 
-    for i in range(1, num_charts):
+    for i in range(1, m):
         farthest_idx = torch.argmax(distances)
         fps_centers[i] = data[farthest_idx]
         dist_to_new = torch.cdist(data, fps_centers[i].unsqueeze(0)).squeeze(1)
@@ -33,7 +33,7 @@ def construct_whitney_atlas(data: torch.Tensor,
     intrinsic_coords = []
     chart_ambient_indices = []
 
-    for i in range(num_charts):
+    for i in range(m):
         in_chart = membership_mask[:, i]
         chart_idx = torch.nonzero(in_chart).squeeze(1)
         chart_ambient_indices.append(chart_idx.cpu())
@@ -58,7 +58,7 @@ def construct_whitney_atlas(data: torch.Tensor,
         U_i = torch.matmul(centered_X, Q_i)
         intrinsic_coords.append(U_i.cpu())
 
-        # STEP 2: 2nd-Order Weingarten Curvature Regression
+        # STEP 2: 2nd-Order Weingarten Curvature Regression via Global Isotropic Standardization
         N_err = centered_X - torch.matmul(U_i, Q_i.T)  
 
         U_quad = torch.zeros(N_i, quad_dim, device=device)
@@ -72,8 +72,6 @@ def construct_whitney_atlas(data: torch.Tensor,
         U_quad_std = U_quad.std(dim=0, keepdim=True) + 1e-8
         U_quad_norm = (U_quad - U_quad_mean) / U_quad_std
 
-        # MATHEMATICAL FIX 1: Global Isotropic Residual Standardization
-        # Prevents zero-division noise blow-up on degenerate normal dimensions.
         global_n_err_std = torch.sqrt(torch.var(N_err, dim=0).mean()) + 1e-6
         N_err_norm = N_err / global_n_err_std
 
@@ -87,8 +85,7 @@ def construct_whitney_atlas(data: torch.Tensor,
         W_norm = torch.linalg.solve(G_reg, rhs)
         W_i = (W_norm / U_quad_std.T) * global_n_err_std
         
-        # MATHEMATICAL FIX 2: Paraboloid Intercept Shift Centering
-        # Eliminates the systematic translation gap caused by E[U_quad] > 0.
+        # Paraboloid Intercept Shift Centering
         mu_i_star = mu_i - torch.matmul(U_quad_mean.squeeze(0), W_i)
 
         print(f"Chart {i:02d} Weingarten Curvature Norm ||W_i||: {W_i.norm().item():.4f}")

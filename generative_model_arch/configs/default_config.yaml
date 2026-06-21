@@ -7,8 +7,8 @@ manifold:
   num_samples: 5000     # N: Number of empirical data points to generate/use
 
 geometry:
-  num_charts: 10       # m: Number of localized Euclidean patches for clustering
-  regularity: 2.0       # beta: Assumed structural smoothness of the manifold
+  num_charts: 3.0      # m: Number of localized Euclidean patches for clustering
+  regularity: 2.0      # beta: Assumed structural smoothness of the manifold
 
 features:
   p_trunc: 1024           # P: Truncation limit for the wavelet expansion. 

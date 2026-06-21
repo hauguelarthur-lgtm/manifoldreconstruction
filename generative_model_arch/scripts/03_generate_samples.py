@@ -31,7 +31,10 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     with open(args.config, 'r') as f: config = yaml.safe_load(f)
-    d = config['manifold']['intrinsic_dim']
+    d = int(config['manifold']['intrinsic_dim'])
+    num_samples = int(config['manifold']['num_samples'])
+    p_trunc = int(config['features']['p_trunc'])
+    time_steps = int(config['integration']['time_steps'])
 
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location=device)
@@ -40,16 +43,20 @@ def main():
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"), map_location=device)
     
     m = len(whitney_atlas)
-    chart_probs = membership_mask.sum(dim=0).float() / membership_mask.sum()
-    chart_assignments = torch.multinomial(chart_probs, config['manifold']['num_samples'], replacement=True)
+    
+    # Defensive contract check: Ensures Stage 02 fully populated the prior list
+    if len(z_clusters_intrinsic) != m:
+        raise RuntimeError(f"Fatal Desync: whitney_atlas contains {m} charts, but z_clusters_intrinsic "
+                           f"contains {len(z_clusters_intrinsic)} slices. Re-execute scripts/02_solve_velocities.py.")
 
-    # MATHEMATICAL FIX 5: Calibrated RKHS Support-Confined KDE Prior Sampling
-    # Resamples exact Phase 2 prior anchors with smooth Kernel smoothing jitter.
-    # Confines test particles strictly inside the trained RKHS transport tube.
+    chart_probs = membership_mask.sum(dim=0).float() / membership_mask.sum()
+    chart_assignments = torch.multinomial(chart_probs, num_samples, replacement=True)
+
+    # Support-Confined KDE Prior Sampling
     Z_0_list = []
     for i in range(m):
         Z_train_i = z_clusters_intrinsic[i]
-        n_gen_i = (chart_assignments == i).sum().item()
+        n_gen_i = int((chart_assignments == i).sum().item())
         
         if Z_train_i.shape[0] > 0:
             idx = torch.randint(0, Z_train_i.shape[0], (n_gen_i,), device=device)
@@ -61,11 +68,11 @@ def main():
         else:
             Z_0_list.append(torch.zeros((n_gen_i, d), device=device))
 
-    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=config['features']['p_trunc']).to(device)
+    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
     model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
 
     print(f"Executing Calibrated RKHS Intrinsic Integration in R^{d}...")
-    U_gen_list = generate_samples(Z_0_list, model, precomputed_etas, config['integration']['time_steps'], device, args.ode_mode)
+    U_gen_list = generate_samples(Z_0_list, model, precomputed_etas, time_steps, device, args.ode_mode)
 
     print("Executing 2nd-Order Weingarten Affine Lift...")
     X_lift_list = []

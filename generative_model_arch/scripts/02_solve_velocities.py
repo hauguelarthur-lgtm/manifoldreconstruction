@@ -20,15 +20,15 @@ def main():
     args = parser.parse_args()
 
     with open(args.config, 'r') as f: config = yaml.safe_load(f)
-    p_trunc = config['features']['p_trunc']
-    time_steps = config['integration']['time_steps']
+    p_trunc = int(config['features']['p_trunc'])
+    time_steps = int(config['integration']['time_steps'])
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location='cpu')
     chart_intrinsic_coords = torch.load(os.path.join(args.data_dir, "chart_intrinsic_coords.pt"), map_location=device)
     
-    m = membership_mask.shape[1]
-    d = chart_intrinsic_coords[0].shape[1]
+    m = int(membership_mask.shape[1])
+    d = int(chart_intrinsic_coords[0].shape[1])
 
     print(f"Executing Covariance-Matched Exact Optimal Transport in R^{d}...")
     z_clusters_intrinsic = []
@@ -44,10 +44,11 @@ def main():
         std_U_i = U_i.std(dim=0, keepdim=True).to(device) if N_i > 1 else torch.ones((1, d), device=device)
         Z_raw_i = torch.randn((N_i, d), device=device) * std_U_i
 
-        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, (torch.cdist(Z_raw_i, U_i, p=2)**2).cpu().numpy())
+        # EXACT CORRECTION: Declares cost_matrix_i explicitly before invoking Earth Mover's Distance
+        cost_matrix_i = torch.cdist(Z_raw_i, U_i, p=2)**2
+        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy(), numItermax=1000000)
         
-        # MATHEMATICAL FIX 1: Column-Wise Argmax (axis=0)
-        # Perfectly synchronizes prior latents to their true OT target partners.
+        # Column-Wise Argmax pairs target U_k to correct Z_k
         z_clusters_intrinsic.append(Z_raw_i[np.argmax(plan_i, axis=0)])
 
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
