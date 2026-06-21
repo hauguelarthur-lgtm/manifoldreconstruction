@@ -1,96 +1,73 @@
 import torch
+from src.gluing import compute_subordinated_partition_of_unity
 
-def generate_samples(Z_0_list: list,
+def generate_samples(Z_0: torch.Tensor,
                      model: torch.nn.Module,
                      precomputed_etas: list, 
+                     centroids: torch.Tensor,
+                     chart_radii: torch.Tensor,
                      num_time_steps: int = 200,
                      device: torch.device = torch.device('cpu'),
-                     ode_mode: bool = False) -> list:
+                     ode_mode: bool = False) -> torch.Tensor:
     """
-    Executes Chart-Decoupled Intrinsic Flow Integration strictly inside R^d.
-    Liberated from the potential flow constraint: evaluates general vector fields via \phi(x)\eta.
+    Executes Overlapping Intrinsic Flow Integration inside R^d.
+    Continuously blends local Besov vector fields via compact bump partition of unity.
     """
-    num_charts = len(Z_0_list)
-    U_t_list = [Z_0.clone().to(device) for Z_0 in Z_0_list]
+    U_t = Z_0.clone().to(device)
+    centroids = centroids.to(device)
+    chart_radii = chart_radii.to(device)
     model.eval()
     
+    m = centroids.shape[0]
     epsilon_num = 1e-5
     dt = (1.0 - epsilon_num) / (num_time_steps - 1)
     max_drift = 15.0
 
-    # -------------------------------------------------------------------------
-    # HARDWARE OPTIMIZATION: Pre-allocate static scalars as native device Tensors.
-    # Completely eliminates asynchronous CPU/GPU PCIe bus lockups inside the hot loop.
-    # -------------------------------------------------------------------------
     time_grid = torch.linspace(0, 1.0 - epsilon_num, num_time_steps, device=device)
     dt_tensor = torch.tensor(dt, device=device)
 
     for step in range(num_time_steps):
-        t_val = time_grid[step]  # Native device scalar
-        
-        # Analytical optimal Girsanov variance schedule D_t^* = (1 - t)^2
+        t_val = time_grid[step]
         D_t_star = (1.0 - t_val) ** 2
-        sqrt_2D = torch.sqrt(2.0 * D_t_star) if D_t_star > 0 else torch.tensor(0.0, device=device)
+        sqrt_2D = torch.sqrt(torch.tensor(2.0 * D_t_star, device=device)) if D_t_star > 0 else 0.0
 
-        for i in range(num_charts):
-            U_t = U_t_list[i]
-            if U_t.size(0) == 0:
-                continue
-                
-            # Extract coefficient matrix \eta_i \in R^{P \times d}
+        # Evaluate compact partition of unity weights \xi_i(U_t) dynamically in R^d
+        weights = compute_subordinated_partition_of_unity(U_t, centroids, chart_radii)
+        
+        # Evaluate global blended vector field across all active charts
+        features = model(U_t)  # (Batch, P)
+        b_t_blended = torch.zeros_like(U_t)
+
+        for i in range(m):
             eta_t_i = precomputed_etas[step][i].to(device)
-            
-            # -----------------------------------------------------------------
-            # MATHEMATICAL CORRECTION 1: General Vector Field Evaluation
-            # Evaluates \phi(x) @ \eta directly. Excises the irrotational Jacobian proxy.
-            # -----------------------------------------------------------------
-            features = model(U_t)                  # Shape: (Batch, P)
-            b_t = torch.matmul(features, eta_t_i)  # (Batch, P) @ (P, d) -> (Batch, d)
+            b_t_local = torch.matmul(features, eta_t_i)  # (Batch, d)
+            rho_i = weights[:, i].unsqueeze(1)
+            b_t_blended += rho_i * b_t_local
 
-            if ode_mode:
-                # Heun's Method (2nd Order Deterministic Probability Flow inside R^d)
-                drift_norms = torch.norm(b_t, dim=1, keepdim=True)
-                b_t_clamped = b_t * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
-                
-                U_pred = U_t + b_t_clamped * dt 
-                if step < num_time_steps - 1:
-                    eta_t_next_i = precomputed_etas[step + 1][i].to(device)
-                    features_next = model(U_pred)
-                    b_t_next = torch.matmul(features_next, eta_t_next_i)
-                    
-                    drift_norms_next = torch.norm(b_t_next, dim=1, keepdim=True)
-                    b_t_next_clamped = b_t_next * torch.clamp(max_drift / (drift_norms_next + 1e-8), max=1.0)
-                    
-                    U_t_list[i] = U_t + 0.5 * (b_t_clamped + b_t_next_clamped) * dt
-                else:
-                    U_t_list[i] = U_pred
-            else:
-                # Euler-Maruyama Method (Stochastic KSI Framework inside R^d)
-                
-                # 1. Algebraic Score Mapping evaluated via graph-native clamping
-                s_t = (t_val * b_t - U_t) / torch.clamp(1.0 - t_val, min=1e-8)
-                
-                # 2. Formulate total SDE drift: Predictor + scaled Langevin Corrector
-                full_drift = b_t + D_t_star * s_t
-                
-                # 3. Unbounded drift clamp applied to total resultant vector
-                drift_norms = torch.norm(full_drift, dim=1, keepdim=True)
-                full_drift = full_drift * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
-                
-                # 4. Discrete integration step
-                dW = torch.randn_like(U_t) * torch.sqrt(dt_tensor)
-                U_t_list[i] = U_t + full_drift * dt + sqrt_2D * dW
-
-    # Terminal Boundary Projection (Epsilon gap closure strictly inside R^d)
-    for i in range(num_charts):
-        U_t = U_t_list[i]
-        if U_t.size(0) == 0:
-            continue
+        if ode_mode:
+            drift_norms = torch.norm(b_t_blended, dim=1, keepdim=True)
+            b_t_clamped = b_t_blended * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
+            U_t = U_t + b_t_clamped * dt 
+        else:
+            # Score-Corrected SDE step natively in R^d
+            s_t = (t_val * b_t_blended - U_t) / torch.clamp(1.0 - t_val, min=1e-8)
+            full_drift = b_t_blended + D_t_star * s_t
             
+            drift_norms = torch.norm(full_drift, dim=1, keepdim=True)
+            full_drift = full_drift * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
+            
+            dW = torch.randn_like(U_t) * torch.sqrt(dt_tensor)
+            U_t = U_t + full_drift * dt + sqrt_2D * dW
+
+    # Terminal Epsilon Step
+    features_final = model(U_t)
+    b_final_blended = torch.zeros_like(U_t)
+    weights_final = compute_subordinated_partition_of_unity(U_t, centroids, chart_radii)
+    
+    for i in range(m):
         eta_final_i = precomputed_etas[-1][i].to(device)
-        features_final = model(U_t)
-        b_t_final = torch.matmul(features_final, eta_final_i)
+        rho_i = weights_final[:, i].unsqueeze(1)
+        b_final_blended += rho_i * torch.matmul(features_final, eta_final_i)
         
-        U_t_list[i] = (U_t + b_t_final * epsilon_num).detach()
-        
-    return U_t_list
+    U_t = U_t + b_final_blended * epsilon_num
+    return U_t.detach()

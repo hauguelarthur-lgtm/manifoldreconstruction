@@ -5,109 +5,99 @@ import argparse
 import yaml
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-if os.path.basename(script_dir) == "scripts":
-    project_root = os.path.dirname(script_dir)
-else:
-    project_root = script_dir
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "scripts" else script_dir
+sys.path.insert(0, project_root) if project_root not in sys.path else None
 
 from src.wavelet_map import TruncatedBesovWaveletMap
 from src.SDEintegrator import generate_samples
-from src.gluing import apply_terminal_ambient_gluing
+from src.gluing import compute_subordinated_partition_of_unity
+
+def formulate_quadratic_features(U: torch.Tensor) -> torch.Tensor:
+    """
+    Generates exact upper-triangular quadratic outer products of intrinsic coordinates.
+    Matches the exact feature order solved during Phase 1 Weingarten regression.
+    """
+    N, d = U.shape
+    quad_dim = d * (d + 1) // 2
+    U_quad = torch.zeros(N, quad_dim, device=U.device)
+    col = 0
+    for dim1 in range(d):
+        for dim2 in range(dim1, d):
+            U_quad[:, col] = U[:, dim1] * U[:, dim2]
+            col += 1
+    return U_quad
 
 def main():
-    default_data_dir = os.path.join(project_root, "data", "processed")
-    default_config_path = os.path.join(project_root, "configs", "default_config.yaml")
-
-    parser = argparse.ArgumentParser(description="Executes Intrinsic Flow Integration and Isometric Lift.")
-    parser.add_argument("--data_dir", type=str, default=default_data_dir)
-    parser.add_argument("--config", type=str, default=default_config_path)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, default=os.path.join(project_root, "data", "processed"))
+    parser.add_argument("--config", type=str, default=os.path.join(project_root, "configs", "default_config.yaml"))
     parser.add_argument("--num_samples", type=int, default=5000)
     parser.add_argument("--p_trunc", type=int, default=1024)
     parser.add_argument("--time_steps", type=int, default=200)
-    parser.add_argument("--ode_mode", action="store_true", help="Execute deterministic Heun ODE instead of Euler SDE.")
-    parser.add_argument("--glue_ambient", action="store_true", help="Apply terminal partition of unity blending in ambient space.")
+    parser.add_argument("--ode_mode", action="store_true")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # 1. Load Config and Artifacts
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     d = config['manifold']['intrinsic_dim']
 
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
-    labels = torch.load(os.path.join(args.data_dir, "labels.pt"), map_location=device)
     chart_intrinsic_coords = torch.load(os.path.join(args.data_dir, "chart_intrinsic_coords.pt"), map_location=device)
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"), map_location=device)
+    smooth_sigmas = torch.load(os.path.join(args.data_dir, "smooth_sigmas.pt"), map_location=device)
     
-    num_charts = len(whitney_atlas)
-    print(f"Loaded Whitney atlas ({num_charts} charts), intrinsic dimension d={d} on {device}.")
-
-    # 2. Continuous Latent Prior Sampling & Categorical Partitioning
-    # Calculate empirical chart occupancy probabilities \pi_i = N_i / N
-    chart_counts = torch.bincount(labels, minlength=num_charts).float()
-    chart_probs = chart_counts / chart_counts.sum()
+    m = len(whitney_atlas)
+    chart_radii = torch.sqrt(smooth_sigmas)
     
-    # Sample multi-nomial assignments for the new generative batch
-    chart_assignments = torch.multinomial(chart_probs, args.num_samples, replacement=True)
+    # Extract intrinsic chart centroids
+    centroids = torch.stack([chart_intrinsic_coords[i].mean(dim=0) for i in range(m)]).to(device)
 
-    Z_0_list = []
-    for i in range(num_charts):
-        n_gen_i = (chart_assignments == i).sum().item()
-        # Sample strictly from standard continuous normal N(0, I_d)
-        Z_0_i = torch.randn((n_gen_i, d), device=device)
-        Z_0_list.append(Z_0_i)
+    # 1. Sample Master Continuous Latent Prior in R^d
+    torch.manual_seed(42)
+    Z_0 = torch.randn(args.num_samples, d, device=device)
 
-    # 3. Instantiate and Calibrate Intrinsic Wavelet Map
+    # 2. Instantiate and Calibrate Besov Wavelet Map
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=args.p_trunc).to(device)
-    U_all = torch.cat(chart_intrinsic_coords, dim=0)
-    model.calibrate(U_all)
+    model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
 
-    mode_str = "ODE (Deterministic)" if args.ode_mode else "SDE (Stochastic)"
-    print(f"Executing Chart-Decoupled Intrinsic {mode_str} Integration across {args.time_steps} steps...")
-
-    # 4. Perform Intrinsic Integration strictly inside R^d
-    U_gen_list = generate_samples(
-        Z_0_list=Z_0_list,
+    print(f"Executing Compact-Weighted Intrinsic SDE Integration in R^{d}...")
+    U_gen = generate_samples(
+        Z_0=Z_0,
         model=model,
         precomputed_etas=precomputed_etas,
+        centroids=centroids,
+        chart_radii=chart_radii,
         num_time_steps=args.time_steps,
         device=device,
         ode_mode=args.ode_mode
     )
 
-    # 5. Exact Isometric Affine Lift to Ambient Space R^p
-    print(f"Executing Exact Isometric Affine Lift from R^{d} -> ambient space...")
-    X_gen_list = []
+    # 3. Exact 2nd-Order Weingarten Lift to Ambient Space R^16
+    print("Executing 2nd-Order Weingarten Affine Lift (Quadratic Normal Correction)...")
+    X_gen_ambient = torch.zeros(args.num_samples, 16, device=device)
     
-    for i in range(num_charts):
-        U_gen_i = U_gen_list[i]
-        if U_gen_i.size(0) == 0:
-            continue
-            
+    # Evaluate subordinated compact weights to blend the lifted ambient patches
+    terminal_weights = compute_subordinated_partition_of_unity(U_gen, centroids, chart_radii)
+
+    U_quad_gen = formulate_quadratic_features(U_gen)
+
+    for i in range(m):
         mu_i = whitney_atlas[i]['mu'].to(device)
         Q_i = whitney_atlas[i]['Q'].to(device)
+        W_i = whitney_atlas[i]['W'].to(device)
         
-        # Lift formula: X_i = U_i @ Q_i.T + mu_i
-        # Maps (N_gen_i x d) @ (d x p) -> (N_gen_i x p)
-        X_gen_i = torch.matmul(U_gen_i, Q_i.T) + mu_i
-        X_gen_list.append(X_gen_i)
+        # EXACT CORRECTION: 2nd-Order Lift Formula (arXiv:2506.19587)
+        # X_i = U @ Q.T + U_quad @ W + mu
+        X_lift_i = torch.matmul(U_gen, Q_i.T) + torch.matmul(U_quad_gen, W_i) + mu_i
+        
+        rho_i = terminal_weights[:, i].unsqueeze(1)
+        X_gen_ambient += rho_i * X_lift_i
 
-    X_gen_ambient = torch.cat(X_gen_list, dim=0)
-
-    # 6. Optional Terminal Ambient Gluing
-    if args.glue_ambient:
-        print("Applying terminal partition of unity blending across ambient chart boundaries...")
-        cluster_centers = torch.load(os.path.join(args.data_dir, "cluster_centers.pt"), map_location=device)
-        cluster_precisions = torch.load(os.path.join(args.data_dir, "cluster_precisions.pt"), map_location=device)
-        X_gen_ambient = apply_terminal_ambient_gluing(X_gen_ambient, whitney_atlas, cluster_centers, cluster_precisions)
-
-    # 7. Serialize Final Generative Tensors
     output_path = os.path.join(args.data_dir, "generated_samples.pt")
     torch.save(X_gen_ambient.cpu(), output_path)
-    print(f"\nPhase 4 Complete. Successfully generated {args.num_samples} ambient samples -> {output_path}")
+    print(f"Phase 4 Complete. Serialized mathematically exact 2nd-order samples -> {output_path}")
 
 if __name__ == "__main__":
     main()

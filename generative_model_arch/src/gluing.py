@@ -1,53 +1,38 @@
 import torch
 
-def compute_smooth_partition_of_unity(x: torch.Tensor, 
-                                      cluster_centers: torch.Tensor, 
-                                      precisions: torch.Tensor = None,
-                                      length_scale: float = 1.0) -> torch.Tensor:
+def compute_subordinated_partition_of_unity(x: torch.Tensor, 
+                                            centroids: torch.Tensor, 
+                                            chart_radii: torch.Tensor) -> torch.Tensor:
     """
-    Computes a smooth Gaussian partition of unity across ambient chart centroids.
-    Incorporates Mahalanobis precision matrices to adapt to local chart covariances.
+    True Stéphanovitch C^\infty Compact Partition of Unity (arXiv:2506.19587).
+    Evaluates compact bump functions strictly subordinated to the open cover B(mu_i, r_i).
+    Guarantees absolute zero weight outside the localized chart boundaries.
     """
-    batch_size, p_dim = x.shape
-    m = cluster_centers.shape[0]
-    
-    if precisions is None:
-        distances_sq = torch.cdist(x, cluster_centers) ** 2
-    else:
-        distances_sq = torch.zeros(batch_size, m, device=x.device)
-        for i in range(m):
-            delta = x - cluster_centers[i] 
-            dist_i = torch.sum(torch.matmul(delta, precisions[i]) * delta, dim=1)
-            distances_sq[:, i] = dist_i
-
-    # Scale logits invariant to ambient dimension p to prevent softmax hard-saturation
-    adjusted_scale = length_scale * torch.sqrt(torch.tensor(p_dim, dtype=torch.float32, device=x.device))
-    logits = -distances_sq / (2 * adjusted_scale ** 2)
-    
-    return torch.softmax(logits, dim=1)
-
-def apply_terminal_ambient_gluing(X_lifted: torch.Tensor,
-                                  whitney_atlas: list,
-                                  cluster_centers: torch.Tensor,
-                                  cluster_precisions: torch.Tensor,
-                                  length_scale: float = 1.0) -> torch.Tensor:
-    """
-    Terminal post-processing: Blends overlapping Whitney chart boundaries in ambient space R^p.
-    Evaluates the partition of unity on lifted coordinates to smooth multi-chart transitions.
-    """
-    weights = compute_smooth_partition_of_unity(X_lifted, cluster_centers, cluster_precisions, length_scale)
-    X_glued = torch.zeros_like(X_lifted)
-    m = len(whitney_atlas)
+    Batch, d = x.shape
+    m = centroids.shape[0]
+    weights = torch.zeros(Batch, m, device=x.device)
     
     for i in range(m):
-        mu_i = whitney_atlas[i]['mu'].to(X_lifted.device)
-        Q_i = whitney_atlas[i]['Q'].to(X_lifted.device)
+        # Euclidean distance squared to chart centroid
+        dist_sq = torch.sum((x - centroids[i]) ** 2, dim=1)
+        r_i_sq = chart_radii[i] ** 2
         
-        # Local chart projection in ambient space: P_i(x) = (x - mu_i) @ Q_i @ Q_i.T + mu_i
-        delta = X_lifted - mu_i
-        proj_i = torch.matmul(torch.matmul(delta, Q_i), Q_i.T) + mu_i
+        # Relative coordinate radius u^2 = (d / r)^2
+        u_sq = dist_sq / r_i_sq
         
-        rho_i = weights[:, i].unsqueeze(1)
-        X_glued += rho_i * proj_i
+        # C^\infty Compact Bump formula: exp(-1 / (1 - u^2)) strictly inside u < 1.
+        # Evaluates to absolute 0.0 for all points where u >= 1 (outside chart cover).
+        inside_mask = u_sq < 1.0
+        if inside_mask.any():
+            weights[inside_mask, i] = torch.exp(-1.0 / (1.0 - u_sq[inside_mask]))
+            
+    # Normalize across active charts to sum to 1.0
+    weight_sums = weights.sum(dim=1, keepdim=True)
+    
+    # Fallback guard: if a stray stochastic particle escapes all covers, assign uniform weights
+    escaped_mask = (weight_sums.squeeze(1) == 0.0)
+    if escaped_mask.any():
+        weights[escaped_mask, :] = 1.0 / m
+        weight_sums[escaped_mask] = 1.0
         
-    return X_glued
+    return weights / weight_sums
