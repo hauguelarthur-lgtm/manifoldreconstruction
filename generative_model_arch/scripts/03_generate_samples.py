@@ -57,10 +57,19 @@ def main():
     torch.manual_seed(42)
     chart_assignments = torch.multinomial(chart_probs, num_samples, replacement=True)
 
+    z_clusters = torch.load(os.path.join(args.data_dir, "z_clusters_intrinsic.pt"), map_location=device)
+    
     Z_0_list = []
     for i in range(m):
+        z_i = z_clusters[i].to(device)
+        # Compute empirical statistics of the training prior for this chart
+        mean_i = z_i.mean(dim=0)
+        std_i = z_i.std(dim=0)
+        
         n_gen_i = (chart_assignments == i).sum().item()
-        Z_0_list.append(torch.randn((n_gen_i, d), device=device))
+        # Sample inference priors from the same support as training priors
+        Z_0_i = torch.normal(mean=mean_i, std=std_i.expand(n_gen_i, d))
+        Z_0_list.append(Z_0_i)
 
     # 2. Instantiate and Calibrate Besov Wavelet Map
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
