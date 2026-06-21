@@ -117,7 +117,6 @@ def main():
         mu_i = whitney_atlas[i]['mu'].to(device)
         Q_i = whitney_atlas[i]['Q'].to(device)
         W_i = whitney_atlas[i]['W'].to(device)
-        print(W_i.norm())
         
         U_quad_i = formulate_quadratic_features(U_gen_i)
         
