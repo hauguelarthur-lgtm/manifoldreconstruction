@@ -1,24 +1,19 @@
 import torch
-from src.gluing import compute_subordinated_partition_of_unity
 
-def generate_samples(Z_0: torch.Tensor,
+def generate_samples(Z_0_list: list,
                      model: torch.nn.Module,
                      precomputed_etas: list, 
-                     centroids: torch.Tensor,
-                     chart_radii: torch.Tensor,
                      num_time_steps: int = 200,
                      device: torch.device = torch.device('cpu'),
-                     ode_mode: bool = False) -> torch.Tensor:
+                     ode_mode: bool = False) -> list:
     """
-    Executes Overlapping Intrinsic Flow Integration inside R^d.
-    Continuously blends local Besov vector fields via compact bump partition of unity.
+    Executes Chart-Decoupled Intrinsic Flow Integration inside R^d (arXiv:2602.20070).
+    Integrates independent chart batches without invalid tangent bundle mixing.
     """
-    U_t = Z_0.clone().to(device)
-    centroids = centroids.to(device)
-    chart_radii = chart_radii.to(device)
+    num_charts = len(Z_0_list)
+    U_t_list = [Z_0.clone().to(device) for Z_0 in Z_0_list]
     model.eval()
     
-    m = centroids.shape[0]
     epsilon_num = 1e-5
     dt = (1.0 - epsilon_num) / (num_time_steps - 1)
     max_drift = 15.0
@@ -29,45 +24,39 @@ def generate_samples(Z_0: torch.Tensor,
     for step in range(num_time_steps):
         t_val = time_grid[step]
         D_t_star = (1.0 - t_val) ** 2
-        sqrt_2D = torch.sqrt(torch.tensor(2.0 * D_t_star, device=device)) if D_t_star > 0 else 0.0
+        sqrt_2D = torch.sqrt(torch.tensor(2.0 * D_t_star, device=device)) if D_t_star > 0 else torch.tensor(0.0, device=device)
 
-        # Evaluate compact partition of unity weights \xi_i(U_t) dynamically in R^d
-        weights = compute_subordinated_partition_of_unity(U_t, centroids, chart_radii)
-        
-        # Evaluate global blended vector field across all active charts
-        features = model(U_t)  # (Batch, P)
-        b_t_blended = torch.zeros_like(U_t)
-
-        for i in range(m):
+        for i in range(num_charts):
+            U_t = U_t_list[i]
+            if U_t.size(0) == 0:
+                continue
+                
             eta_t_i = precomputed_etas[step][i].to(device)
-            b_t_local = torch.matmul(features, eta_t_i)  # (Batch, d)
-            rho_i = weights[:, i].unsqueeze(1)
-            b_t_blended += rho_i * b_t_local
+            features = model(U_t)                  # (Batch, P)
+            b_t = torch.matmul(features, eta_t_i)  # (Batch, d)
 
-        if ode_mode:
-            drift_norms = torch.norm(b_t_blended, dim=1, keepdim=True)
-            b_t_clamped = b_t_blended * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
-            U_t = U_t + b_t_clamped * dt 
-        else:
-            # Score-Corrected SDE step natively in R^d
-            s_t = (t_val * b_t_blended - U_t) / torch.clamp(1.0 - t_val, min=1e-8)
-            full_drift = b_t_blended + D_t_star * s_t
-            
-            drift_norms = torch.norm(full_drift, dim=1, keepdim=True)
-            full_drift = full_drift * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
-            
-            dW = torch.randn_like(U_t) * torch.sqrt(dt_tensor)
-            U_t = U_t + full_drift * dt + sqrt_2D * dW
+            if ode_mode:
+                drift_norms = torch.norm(b_t, dim=1, keepdim=True)
+                b_t_clamped = b_t * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
+                U_t_list[i] = U_t + b_t_clamped * dt 
+            else:
+                # Closed-form algebraic score mapping (arXiv:2602.20070)
+                s_t = (t_val * b_t - U_t) / torch.clamp(1.0 - t_val, min=1e-8)
+                full_drift = b_t + D_t_star * s_t
+                
+                drift_norms = torch.norm(full_drift, dim=1, keepdim=True)
+                full_drift = full_drift * torch.clamp(max_drift / (drift_norms + 1e-8), max=1.0)
+                
+                dW = torch.randn_like(U_t) * torch.sqrt(dt_tensor)
+                U_t_list[i] = U_t + full_drift * dt + sqrt_2D * dW
 
-    # Terminal Epsilon Step
-    features_final = model(U_t)
-    b_final_blended = torch.zeros_like(U_t)
-    weights_final = compute_subordinated_partition_of_unity(U_t, centroids, chart_radii)
-    
-    for i in range(m):
+    # Terminal Epsilon Boundary Step
+    for i in range(num_charts):
+        U_t = U_t_list[i]
+        if U_t.size(0) == 0:
+            continue
         eta_final_i = precomputed_etas[-1][i].to(device)
-        rho_i = weights_final[:, i].unsqueeze(1)
-        b_final_blended += rho_i * torch.matmul(features_final, eta_final_i)
+        b_t_final = torch.matmul(model(U_t), eta_final_i)
+        U_t_list[i] = (U_t + b_t_final * epsilon_num).detach()
         
-    U_t = U_t + b_final_blended * epsilon_num
-    return U_t.detach()
+    return U_t_list

@@ -1,38 +1,54 @@
 import torch
 
-def compute_subordinated_partition_of_unity(x: torch.Tensor, 
-                                            centroids: torch.Tensor, 
-                                            chart_radii: torch.Tensor) -> torch.Tensor:
+def compute_ambient_subordinated_weights(X_ambient: torch.Tensor, 
+                                         whitney_atlas: list, 
+                                         covering_radius: float) -> torch.Tensor:
     """
-    True Stéphanovitch C^\infty Compact Partition of Unity (arXiv:2506.19587).
-    Evaluates compact bump functions strictly subordinated to the open cover B(mu_i, r_i).
-    Guarantees absolute zero weight outside the localized chart boundaries.
+    True Stéphanovitch C^\infty Compact Partition of Unity in Ambient Space R^p (arXiv:2506.19587).
+    Evaluates compact bump functions exp(-1 / (1 - (dist/r)^2)) centered at ambient centroids \mu_i.
     """
-    Batch, d = x.shape
-    m = centroids.shape[0]
-    weights = torch.zeros(Batch, m, device=x.device)
-    
+    Batch, p = X_ambient.shape
+    m = len(whitney_atlas)
+    weights = torch.zeros(Batch, m, device=X_ambient.device)
+    r_sq = covering_radius ** 2
+
     for i in range(m):
-        # Euclidean distance squared to chart centroid
-        dist_sq = torch.sum((x - centroids[i]) ** 2, dim=1)
-        r_i_sq = chart_radii[i] ** 2
+        mu_i = whitney_atlas[i]['mu'].to(X_ambient.device)
+        dist_sq = torch.sum((X_ambient - mu_i) ** 2, dim=1)
+        u_sq = dist_sq / r_sq
         
-        # Relative coordinate radius u^2 = (d / r)^2
-        u_sq = dist_sq / r_i_sq
-        
-        # C^\infty Compact Bump formula: exp(-1 / (1 - u^2)) strictly inside u < 1.
-        # Evaluates to absolute 0.0 for all points where u >= 1 (outside chart cover).
         inside_mask = u_sq < 1.0
         if inside_mask.any():
             weights[inside_mask, i] = torch.exp(-1.0 / (1.0 - u_sq[inside_mask]))
-            
-    # Normalize across active charts to sum to 1.0
+
     weight_sums = weights.sum(dim=1, keepdim=True)
-    
-    # Fallback guard: if a stray stochastic particle escapes all covers, assign uniform weights
     escaped_mask = (weight_sums.squeeze(1) == 0.0)
     if escaped_mask.any():
         weights[escaped_mask, :] = 1.0 / m
         weight_sums[escaped_mask] = 1.0
-        
+
     return weights / weight_sums
+
+def apply_ambient_overlap_blending(X_ambient: torch.Tensor, 
+                                   whitney_atlas: list, 
+                                   covering_radius: float) -> torch.Tensor:
+    """
+    Blends overlapping ambient manifold patches using subordinated compact bump weights.
+    Eliminates boundary shearing along chart transition seams.
+    """
+    weights = compute_ambient_subordinated_weights(X_ambient, whitney_atlas, covering_radius)
+    X_blended = torch.zeros_like(X_ambient)
+    m = len(whitney_atlas)
+
+    for i in range(m):
+        mu_i = whitney_atlas[i]['mu'].to(X_ambient.device)
+        Q_i = whitney_atlas[i]['Q'].to(X_ambient.device)
+        
+        # Local tangent hyperplane projection in ambient space R^p
+        delta = X_ambient - mu_i
+        proj_i = torch.matmul(torch.matmul(delta, Q_i), Q_i.T) + mu_i
+        
+        rho_i = weights[:, i].unsqueeze(1)
+        X_blended += rho_i * proj_i
+
+    return X_blended

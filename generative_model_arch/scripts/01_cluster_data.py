@@ -68,10 +68,12 @@ def main():
 
     print(f"\nPhase 1 Complete. Serialized artifacts to {args.output_dir}:")
     print(f" ├── data.pt                    (Ambient Ground Truth, {data_ambient.shape})")
+    print(f" ├── membership_mask.pt         (Overlapping chart assignments, {membership_mask.shape})")
     print(f" ├── chart_intrinsic_coords.pt  (List of {len(chart_intrinsic_coords)} intrinsic tensors in R^{d})")
-    print(f" ├── whitney_atlas.pt           (List of {len(whitney_atlas)} Whitney tangent frames [mu_i, Q_i])")
+    print(f" ├── whitney_atlas.pt           (List of {len(whitney_atlas)} Whitney tangent frames [mu_i, Q_i, W_i])")
     print(f" ├── cluster_centers.pt         (Ambient chart centroids in R^{data_ambient.shape[1]})")
-    print(f" └── cluster_precisions.pt      (Ambient pseudo-inverse precisions)")
+    print(f" ├── smooth_sigmas.pt           (Compact bump function length-scales)")
+    print(f" └── chart_ambient_indices.pt   (List of ambient index mappings per chart)")
 
 if __name__ == "__main__":
     main()

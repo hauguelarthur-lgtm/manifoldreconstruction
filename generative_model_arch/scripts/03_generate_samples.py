@@ -1,3 +1,4 @@
+import math
 import torch
 import os
 import sys
@@ -10,13 +11,10 @@ sys.path.insert(0, project_root) if project_root not in sys.path else None
 
 from src.wavelet_map import TruncatedBesovWaveletMap
 from src.SDEintegrator import generate_samples
-from src.gluing import compute_subordinated_partition_of_unity
+from src.gluing import apply_ambient_overlap_blending
 
 def formulate_quadratic_features(U: torch.Tensor) -> torch.Tensor:
-    """
-    Generates exact upper-triangular quadratic outer products of intrinsic coordinates.
-    Matches the exact feature order solved during Phase 1 Weingarten regression.
-    """
+    """Generates exact upper-triangular quadratic outer products of intrinsic coordinates."""
     N, d = U.shape
     quad_dim = d * (d + 1) // 2
     U_quad = torch.zeros(N, quad_dim, device=U.device)
@@ -35,6 +33,7 @@ def main():
     parser.add_argument("--p_trunc", type=int, default=1024)
     parser.add_argument("--time_steps", type=int, default=200)
     parser.add_argument("--ode_mode", action="store_true")
+    parser.add_argument("--blend_ambient", action="store_true", default=True)
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -44,60 +43,71 @@ def main():
     d = config['manifold']['intrinsic_dim']
 
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
+    membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location=device)
     chart_intrinsic_coords = torch.load(os.path.join(args.data_dir, "chart_intrinsic_coords.pt"), map_location=device)
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"), map_location=device)
-    smooth_sigmas = torch.load(os.path.join(args.data_dir, "smooth_sigmas.pt"), map_location=device)
+    smooth_sigmas = torch.load(os.path.join(args.data_dir, "smooth_sigmas.pt"), map_location='cpu')
     
     m = len(whitney_atlas)
-    chart_radii = torch.sqrt(smooth_sigmas)
-    
-    # Extract intrinsic chart centroids
-    centroids = torch.stack([chart_intrinsic_coords[i].mean(dim=0) for i in range(m)]).to(device)
+    # Covering radius r = 1.5 * delta extracted from Phase 1 sigma parameterization
+    covering_radius = math.sqrt(smooth_sigmas[0].item()) * 2.0  
 
-    # 1. Sample Master Continuous Latent Prior in R^d
+    # 1. Categorical Chart Partitioning of the Generative Batch
+    chart_counts = membership_mask.sum(dim=0).float()
+    chart_probs = chart_counts / chart_counts.sum()
+    
     torch.manual_seed(42)
-    Z_0 = torch.randn(args.num_samples, d, device=device)
+    chart_assignments = torch.multinomial(chart_probs, args.num_samples, replacement=True)
+
+    Z_0_list = []
+    for i in range(m):
+        n_gen_i = (chart_assignments == i).sum().item()
+        Z_0_list.append(torch.randn((n_gen_i, d), device=device))
 
     # 2. Instantiate and Calibrate Besov Wavelet Map
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=args.p_trunc).to(device)
     model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
 
-    print(f"Executing Compact-Weighted Intrinsic SDE Integration in R^{d}...")
-    U_gen = generate_samples(
-        Z_0=Z_0,
+    print(f"Executing Chart-Decoupled Intrinsic SDE Integration in R^{d}...")
+    U_gen_list = generate_samples(
+        Z_0_list=Z_0_list,
         model=model,
         precomputed_etas=precomputed_etas,
-        centroids=centroids,
-        chart_radii=chart_radii,
         num_time_steps=args.time_steps,
         device=device,
         ode_mode=args.ode_mode
     )
 
-    # 3. Exact 2nd-Order Weingarten Lift to Ambient Space R^16
+    # 3. Exact 2nd-Order Weingarten Affine Lift to Ambient Space R^16
     print("Executing 2nd-Order Weingarten Affine Lift (Quadratic Normal Correction)...")
-    X_gen_ambient = torch.zeros(args.num_samples, 16, device=device)
-    
-    # Evaluate subordinated compact weights to blend the lifted ambient patches
-    terminal_weights = compute_subordinated_partition_of_unity(U_gen, centroids, chart_radii)
-
-    U_quad_gen = formulate_quadratic_features(U_gen)
+    X_lift_list = []
 
     for i in range(m):
+        U_gen_i = U_gen_list[i]
+        if U_gen_i.size(0) == 0:
+            continue
+            
         mu_i = whitney_atlas[i]['mu'].to(device)
         Q_i = whitney_atlas[i]['Q'].to(device)
         W_i = whitney_atlas[i]['W'].to(device)
         
+        U_quad_i = formulate_quadratic_features(U_gen_i)
+        
         # EXACT CORRECTION: 2nd-Order Lift Formula (arXiv:2506.19587)
         # X_i = U @ Q.T + U_quad @ W + mu
-        X_lift_i = torch.matmul(U_gen, Q_i.T) + torch.matmul(U_quad_gen, W_i) + mu_i
-        
-        rho_i = terminal_weights[:, i].unsqueeze(1)
-        X_gen_ambient += rho_i * X_lift_i
+        X_lift_i = torch.matmul(U_gen_i, Q_i.T) + torch.matmul(U_quad_i, W_i) + mu_i
+        X_lift_list.append(X_lift_i)
+
+    X_gen_ambient = torch.cat(X_lift_list, dim=0)
+
+    # 4. Terminal Subordinated Overlap Blending in Ambient Space R^16
+    if args.blend_ambient:
+        print("Applying subordinated compact bump blending across ambient chart boundaries...")
+        X_gen_ambient = apply_ambient_overlap_blending(X_gen_ambient, whitney_atlas, covering_radius)
 
     output_path = os.path.join(args.data_dir, "generated_samples.pt")
     torch.save(X_gen_ambient.cpu(), output_path)
-    print(f"Phase 4 Complete. Serialized mathematically exact 2nd-order samples -> {output_path}")
+    print(f"Phase 4 Complete. Serialized mathematically exact 2nd-order ambient samples -> {output_path}")
 
 if __name__ == "__main__":
     main()

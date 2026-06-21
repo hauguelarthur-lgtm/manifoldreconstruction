@@ -33,14 +33,19 @@ def main():
     # We match a single global Gaussian prior to the raw data indices once.
     # Shared points across overlapping charts receive the exact same starting latent z_j.
     # -------------------------------------------------------------------------
-    print(f"Generating synchronized Master Latent Prior N(0, I_{d}) for N={N} raw points...")
+    print(f"Generating synchronized Master Latent Prior N(0, I_{d}) via Global SVD Proxy matching...")
     torch.manual_seed(42)
     Z_master_raw = torch.randn(N, d, device=device)
     
-    # To run a stable master OT, we match Z_master against the first intrinsic chart representation
-    # (or any standardized global representation) purely to establish a master index bijection
-    U_master_proxy = chart_intrinsic_coords[0][:N] if chart_intrinsic_coords[0].shape[0] == N else Z_master_raw.clone()
+    # Load raw ambient data to establish global geometric proxy
+    data_ambient = torch.load(os.path.join(args.data_dir, "data.pt"), map_location=device)
+    centered_ambient = data_ambient - data_ambient.mean(dim=0)
     
+    # Extract top 'd' global singular vectors to form U_master_proxy \in R^{N \times d}
+    _, _, V = torch.linalg.svd(centered_ambient, full_matrices=False)
+    U_master_proxy = torch.matmul(centered_ambient, V[:d].T)
+    
+    # Solve global Optimal Transport natively in R^d
     cost_matrix = cdist(Z_master_raw.cpu().numpy(), U_master_proxy.cpu().numpy(), metric='sqeuclidean')
     master_plan = ot.emd(np.ones(N)/N, np.ones(N)/N, cost_matrix)
     col_ind = np.argmax(master_plan, axis=1)
@@ -48,14 +53,14 @@ def main():
     Z_master_sorted = torch.zeros_like(Z_master_raw)
     Z_master_sorted[col_ind] = Z_master_raw[np.arange(N)]
 
-    # Slice the master latents into the individual overlapping chart streams
+    # Slice the globally ordered master latents into the individual overlapping chart streams
     z_clusters_intrinsic = []
     for i in range(m):
         in_chart_idx = torch.nonzero(membership_mask[:, i]).squeeze(1).to(device)
         z_clusters_intrinsic.append(Z_master_sorted[in_chart_idx])
 
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
-    print("Serialized synchronized overlapping latents to z_clusters_intrinsic.pt.")
+    print("Serialized synchronized, non-crossing overlapping latents to z_clusters_intrinsic.pt.")
 
     # Instantiate and calibrate Besov Wavelet Map
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=args.p_trunc).to(device)
