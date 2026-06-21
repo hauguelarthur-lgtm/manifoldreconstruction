@@ -2,6 +2,7 @@ import torch
 import os
 import sys
 import argparse
+import yaml
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(script_dir) == "scripts":
@@ -11,45 +12,65 @@ else:
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from src.manifoldclustering import partition_data
-from src.projector import GlobalSubspaceProjector
+from src.manifoldclustering import construct_whitney_atlas
 
 def main():
     default_data_path = os.path.join(project_root, "data", "raw", "dataset.pt")
     default_output_dir = os.path.join(project_root, "data", "processed")
+    default_config_path = os.path.join(project_root, "configs", "default_config.yaml")
 
-    parser = argparse.ArgumentParser(description="Partitions ambient data into topological patches.")
-    parser.add_argument("--data_path", type=str, default=default_data_path, help="Path to raw empirical data tensor (N, p).")
-    parser.add_argument("--output_dir", type=str, default=default_output_dir, help="Directory to save clustered data.")
-    parser.add_argument("--num_charts", type=int, default=10, help="Number of local Euclidean charts (m).")
+    parser = argparse.ArgumentParser(description="Constructs the intrinsic Whitney Submanifold Atlas.")
+    parser.add_argument("--data_path", type=str, default=default_data_path)
+    parser.add_argument("--output_dir", type=str, default=default_output_dir)
+    parser.add_argument("--config", type=str, default=default_config_path)
+    parser.add_argument("--num_charts", type=int, default=10)
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if os.path.exists(args.data_path):
-        data = torch.load(args.data_path)
-    else:
-        print(f"Warning: {args.data_path} not found. Generating mock empirical data.")
-        data = torch.randn(5000, 16)
-
-    # 1. Execute SVD Global Subspace Truncation BEFORE Clustering
-    print("Executing Global SVD Subspace Truncation...")
-    projector = GlobalSubspaceProjector(variance_threshold=0.999)
-    data_k = projector.fit_transform(data)
+    # 1. Load ambient raw dataset
+    if not os.path.exists(args.data_path):
+        raise FileNotFoundError(f"Fatal: Raw ambient dataset not found at {args.data_path}. "
+                                f"Execute scripts/00_generate_basic_manifold.py first.")
     
-    # 2. Partition strictly within the dense R^k subspace
-    print(f"Partitioning data into {args.num_charts} topological charts in R^{projector.k}...")
-    labels, cluster_centers_k, cluster_precisions_k = partition_data(data_k, num_charts=args.num_charts)
-
-    # 3. Serialize artifacts
-    torch.save(data, os.path.join(args.output_dir, "data.pt"))
-    torch.save(projector, os.path.join(args.output_dir, "projector.pt"))
-    torch.save(data_k, os.path.join(args.output_dir, "data_k.pt"))
+    data_ambient = torch.load(args.data_path, map_location=device)
     
-    torch.save(labels, os.path.join(args.output_dir, "labels.pt"))
-    torch.save(cluster_centers_k, os.path.join(args.output_dir, "cluster_centers_k.pt"))
-    torch.save(cluster_precisions_k, os.path.join(args.output_dir, "cluster_precisions_k.pt"))
-    print(f"Clustering complete. Artifacts saved to {args.output_dir}.")
+    # 2. Extract intrinsic dimension 'd' from config
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+    d = config['manifold']['intrinsic_dim']
+
+    print(f"Loaded ambient tensor: Shape {data_ambient.shape} on {device}")
+    print(f"Executing Intrinsic Whitney Atlas Construction: m={args.num_charts}, d={d}...")
+
+    # 3. Execute Whitney Submanifold Decomposition
+    (labels, 
+     chart_intrinsic_coords, 
+     whitney_atlas, 
+     cluster_centers, 
+     cluster_precisions) = construct_whitney_atlas(
+        data=data_ambient,
+        num_charts=args.num_charts,
+        intrinsic_dim=d
+    )
+
+    # 4. Serialize artifacts strictly to the processed directory
+    # Tensors are cast to CPU prior to disk I/O to prevent CUDA memory pinning leaks
+    torch.save(data_ambient.cpu(), os.path.join(args.output_dir, "data.pt"))
+    torch.save(labels.cpu(), os.path.join(args.output_dir, "labels.pt"))
+    torch.save([u.cpu() for u in chart_intrinsic_coords], os.path.join(args.output_dir, "chart_intrinsic_coords.pt"))
+    torch.save(whitney_atlas, os.path.join(args.output_dir, "whitney_atlas.pt"))
+    torch.save(cluster_centers.cpu(), os.path.join(args.output_dir, "cluster_centers.pt"))
+    torch.save(cluster_precisions.cpu(), os.path.join(args.output_dir, "cluster_precisions.pt"))
+
+    print(f"\nPhase 1 Complete. Serialized artifacts to {args.output_dir}:")
+    print(f" ├── data.pt                    (Ambient Ground Truth, {data_ambient.shape})")
+    print(f" ├── labels.pt                  (Chart assignments, {labels.shape})")
+    print(f" ├── chart_intrinsic_coords.pt  (List of {len(chart_intrinsic_coords)} intrinsic tensors in R^{d})")
+    print(f" ├── whitney_atlas.pt           (List of {len(whitney_atlas)} Whitney tangent frames [mu_i, Q_i])")
+    print(f" ├── cluster_centers.pt         (Ambient chart centroids in R^{data_ambient.shape[1]})")
+    print(f" └── cluster_precisions.pt      (Ambient pseudo-inverse precisions)")
 
 if __name__ == "__main__":
     main()

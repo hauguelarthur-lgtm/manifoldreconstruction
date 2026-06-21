@@ -4,20 +4,20 @@ import numpy as np
 
 class TruncatedBesovWaveletMap(nn.Module):
     """
-    Multi-Scale Random Fourier Features.
-    Divides the P basis functions across multiple frequency bandwidths 
-    to capture both global topology and local high-frequency curvature.
+    Multi-Scale Random Fourier Features (Truncated Besov Wavelet Map).
+    Parameterizes the scaling space across multiple frequency bandwidths 
+    natively inside the intrinsic dimension 'd'.
     """
     def __init__(self, ambient_dim: int, intrinsic_dim: int, p_truncation: int):
         super().__init__()
-        self.p = ambient_dim
+        # For Phase 3 intrinsic regression, ambient_dim == intrinsic_dim == d
+        self.p = ambient_dim      
         self.d = intrinsic_dim
         self.P = p_truncation
         
-        # STRICT CORRECTION: Isolate random state via local generator
-        # Prevents global PyTorch seed reset which collapses the Z prior variance.
+        # Isolate random generator state to prevent global seed collapse
         gen = torch.Generator()
-        gen.manual_seed(0)
+        gen.manual_seed(42)
         
         self.omega = nn.Parameter(torch.randn(self.P, self.p, generator=gen), requires_grad=False)
         self.bias = nn.Parameter(torch.rand(self.P, generator=gen) * 2 * np.pi, requires_grad=False)
@@ -25,8 +25,8 @@ class TruncatedBesovWaveletMap(nn.Module):
 
     def calibrate(self, x: torch.Tensor, subsample: int = 2000):
         """
-        Dynamically calibrates the Random Fourier Feature bandwidths using the 
-        median pairwise distance heuristic of the empirical data manifold.
+        Dynamically calibrates frequency bandwidths using the median pairwise 
+        distance heuristic of the empirical intrinsic coordinates.
         """
         with torch.no_grad():
             N = x.size(0)
@@ -44,6 +44,7 @@ class TruncatedBesovWaveletMap(nn.Module):
             
             base_freq = 1.0 / median_dist
             
+            # Distribute basis functions across dyadic frequency scales
             scales = [base_freq * 0.5, base_freq, base_freq * 2.0]
             p_per_scale = self.P // len(scales)
             
@@ -63,6 +64,10 @@ class TruncatedBesovWaveletMap(nn.Module):
         return self.scale * torch.cos(projection)
 
 def compute_feature_gradients(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    """
+    Computes exact analytical Jacobian feature gradients \nabla\phi(x).
+    Returns tensor of shape (Batch, P, d).
+    """
     projection = torch.matmul(x, model.omega.T) + model.bias
     S = -model.scale * torch.sin(projection)
     grads = S.unsqueeze(-1) * model.omega.unsqueeze(0)

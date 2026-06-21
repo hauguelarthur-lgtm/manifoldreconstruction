@@ -3,7 +3,7 @@
 # Hyperparameters for Minimax-Optimal KSI Pipeline
 manifold:
   ambient_dim: 16       # p: Dimension of the ambient space
-  intrinsic_dim: 4      # d: Estimated intrinsic dimension of the manifold
+  intrinsic_dim: 3      # d: Estimated intrinsic dimension of the manifold
   num_samples: 5000     # N: Number of empirical data points to generate/use
 
 geometry:
@@ -15,5 +15,5 @@ features:
                         # Theoretically scaled as P ~ n^{d/(2\beta+d)}
 
 integration:
-  time_steps: 50        # Discretization resolution for the SDE integration
+  time_steps: 200        # Discretization resolution for the SDE integration
   num_gen_samples: 1000 # Number of synthetic samples to generate during inference
