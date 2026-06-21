@@ -19,8 +19,7 @@ def main():
     parser.add_argument("--config", type=str, default=os.path.join(project_root, "configs", "default_config.yaml"))
     args = parser.parse_args()
 
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
+    with open(args.config, 'r') as f: config = yaml.safe_load(f)
     p_trunc = config['features']['p_trunc']
     time_steps = config['integration']['time_steps']
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -42,12 +41,12 @@ def main():
             z_clusters_intrinsic.append(torch.zeros((0, d), device=device))
             continue
 
-        # MATHEMATICAL CORRECTION: Covariance-Matched Base Prior
-        # Eliminates the radial supernova explosion field.
         std_U_i = U_i.std(dim=0, keepdim=True).to(device) if N_i > 1 else torch.ones((1, d), device=device)
         Z_raw_i = torch.randn((N_i, d), device=device) * std_U_i
 
-        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, (torch.cdist(Z_raw_i, U_i, p=2)**2).cpu().numpy())
+        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, (torch.cdist(Z_raw_i, U_i, p=2)**2).cpu().numpy(), numItermax=500000)
+        
+        # Capture exactly sorted training priors for Phase 3 KDE sampling
         z_clusters_intrinsic.append(Z_raw_i[np.argmax(plan_i, axis=1)])
 
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
@@ -70,7 +69,6 @@ def main():
                 eta_t_local.append(torch.zeros((p_trunc, d), device=device))
                 continue
 
-            # Pass the calibrated RKHS penalty diagonal directly into the solver
             eta_t_local.append(solve_local_system(
                 features=model((1.0 - t_val) * Z_i + t_val * U_i),
                 target_velocities=U_i - Z_i,

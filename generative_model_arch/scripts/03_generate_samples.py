@@ -36,35 +36,37 @@ def main():
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location=device)
     chart_intrinsic_coords = torch.load(os.path.join(args.data_dir, "chart_intrinsic_coords.pt"), map_location=device)
+    z_clusters_intrinsic = torch.load(os.path.join(args.data_dir, "z_clusters_intrinsic.pt"), map_location=device)
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"), map_location=device)
     
     m = len(whitney_atlas)
     chart_probs = membership_mask.sum(dim=0).float() / membership_mask.sum()
     chart_assignments = torch.multinomial(chart_probs, config['manifold']['num_samples'], replacement=True)
 
-    # MATHEMATICAL CORRECTION: Match Phase 3 test latents exactly to Phase 2 marginal scale
+    # MATHEMATICAL FIX 5: Calibrated RKHS Support-Confined KDE Prior Sampling
+    # Resamples exact Phase 2 prior anchors with smooth Kernel smoothing jitter.
+    # Confines test particles strictly inside the trained RKHS transport tube.
     Z_0_list = []
     for i in range(m):
-        U_i = chart_intrinsic_coords[i]
+        Z_train_i = z_clusters_intrinsic[i]
         n_gen_i = (chart_assignments == i).sum().item()
         
-        if U_i.shape[0] > 1:
-            std_U_i = U_i.std(dim=0, keepdim=True).to(device)
-            u_min = U_i.min(dim=0).values.to(device)
-            u_max = U_i.max(dim=0).values.to(device)
+        if Z_train_i.shape[0] > 0:
+            # Resample training anchors with replacement
+            idx = torch.randint(0, Z_train_i.shape[0], (n_gen_i,), device=device)
+            base_anchors = Z_train_i[idx]
+            
+            # Add continuous Kernel Density smoothing jitter (sigma_kde = 0.05 * std)
+            kde_bandwidth = (Z_train_i.std(dim=0, keepdim=True) + 1e-6) * 0.05
+            jitter = torch.randn((n_gen_i, d), device=device) * kde_bandwidth
+            Z_0_list.append(base_anchors + jitter)
         else:
-            std_U_i = torch.ones((1, d), device=device)
-            u_min = torch.full((d,), -1.0, device=device)
-            u_max = torch.full((d,), 1.0, device=device)
-
-        Z_0_raw = torch.randn((n_gen_i, d), device=device) * std_U_i
-        Z_0_clamped = torch.clamp(Z_0_raw, min=u_min, max=u_max)
-        Z_0_list.append(Z_0_clamped)
+            Z_0_list.append(torch.zeros((n_gen_i, d), device=device))
 
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=config['features']['p_trunc']).to(device)
     model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
 
-    print(f"Executing Chart-Decoupled Intrinsic Integration in R^{d}...")
+    print(f"Executing Calibrated RKHS Intrinsic Integration in R^{d}...")
     U_gen_list = generate_samples(Z_0_list, model, precomputed_etas, config['integration']['time_steps'], device, args.ode_mode)
 
     print("Executing 2nd-Order Weingarten Affine Lift...")
