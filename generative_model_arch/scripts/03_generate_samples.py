@@ -11,7 +11,6 @@ sys.path.insert(0, project_root) if project_root not in sys.path else None
 
 from src.wavelet_map import TruncatedBesovWaveletMap
 from src.SDEintegrator import generate_samples
-from src.gluing import apply_ambient_overlap_blending
 
 def formulate_quadratic_features(U: torch.Tensor) -> torch.Tensor:
     """Generates exact upper-triangular quadratic outer products of intrinsic coordinates."""
@@ -30,7 +29,6 @@ def main():
     parser.add_argument("--data_dir", type=str, default=os.path.join(project_root, "data", "processed"))
     parser.add_argument("--config", type=str, default=os.path.join(project_root, "configs", "default_config.yaml"))
     parser.add_argument("--ode_mode", action="store_true")
-    parser.add_argument("--blend_ambient", action="store_true", default=False)
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -100,10 +98,6 @@ def main():
 
     X_gen_ambient = torch.cat(X_lift_list, dim=0)
 
-    # 4. Terminal Subordinated Overlap Blending in Ambient Space R^16
-    if args.blend_ambient:
-        print("Applying subordinated compact bump blending across ambient chart boundaries...")
-        X_gen_ambient = apply_ambient_overlap_blending(X_gen_ambient, whitney_atlas, covering_radius)
 
     output_path = os.path.join(args.data_dir, "generated_samples.pt")
     torch.save(X_gen_ambient.cpu(), output_path)

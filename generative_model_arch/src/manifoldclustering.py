@@ -84,9 +84,19 @@ def construct_whitney_atlas(data: torch.Tensor,
                 U_quad[:, col] = U_i[:, dim1] * U_i[:, dim2]
                 col += 1
 
-        # Solve Least-Squares for Weingarten tensor W_i: (quad_dim x p)
-        # Maps quadratic intrinsic terms back to ambient normal displacements
-        W_i = torch.linalg.lstsq(U_quad, N_err).solution
+        G = torch.matmul(U_quad.T, U_quad)
+        
+        # Calculate the adaptive scale-invariant penalty \lambda
+        alpha = 1e-4
+        trace_scale = torch.trace(G) / quad_dim
+        lambda_reg = alpha * trace_scale + 1e-7
+        
+        # Apply isotropic Tikhonov ridge
+        G_reg = G + torch.eye(quad_dim, device=device) * lambda_reg
+        rhs = torch.matmul(U_quad.T, N_err)
+
+        # Solve the well-conditioned system for W_i \in R^{quad_dim x p}
+        W_i = torch.linalg.solve(G_reg, rhs)
 
         atlas_frames.append({
             'mu': mu_i.cpu(), 
