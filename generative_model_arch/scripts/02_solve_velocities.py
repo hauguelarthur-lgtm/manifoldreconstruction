@@ -30,21 +30,32 @@ def main():
     d = int(chart_intrinsic_coords[0].shape[1])
     N = int(membership_mask.shape[0])
 
-    # IMMUTABLE PHYSICAL CONSTANT OF THE BENAMOU-BRENIER FLOW
-    besov_beta = 1.50
+    beta_path = os.path.join(args.data_dir, "besov_beta.pt")
+    if os.path.exists(beta_path):
+        besov_beta = float(torch.load(beta_path, map_location='cpu').item())
+    else:
+        besov_beta = 1.50
 
     raw_time_steps = config['integration']['time_steps']
     if str(raw_time_steps).strip().lower() in ['auto', 'none', '0']:
         exponent = besov_beta / (2.0 * besov_beta + float(d))
-        time_steps = max(50, min(int(15.0 * math.pow(N, exponent)), 2000))
+        t_calc = int(15.0 * math.pow(N, exponent))
+        time_steps = max(50, min(t_calc, 2000)) * 2
     else:
         time_steps = int(float(raw_time_steps))
 
-    print(f"Executing Covariance-Matched Exact Optimal Transport in R^{d}...")
+    # =========================================================
+    # PILLAR 1: OPTIMAL TRANSPORT LOOP (With Chart Advancement)
+    # =========================================================
+    print(f"Executing Covariance-Matched Exact Optimal Transport across {m} charts in R^{d}...")
     z_clusters_intrinsic = []
     torch.manual_seed(42)
 
     for i in range(m):
+        # In-place terminal advancement update
+        sys.stdout.write(f"\r[Optimal Transport] Solved chart {i + 1}/{m} ({(i + 1) / m * 100:.1f}%)")
+        sys.stdout.flush()
+
         U_i = chart_intrinsic_coords[i]
         N_i = U_i.shape[0]
         if N_i == 0:
@@ -58,14 +69,21 @@ def main():
         plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy())
         z_clusters_intrinsic.append(Z_raw_i[np.argmax(plan_i, axis=0)])
 
+    sys.stdout.write("\n")
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
 
-    print(f"Calibrating {m} chart-decoupled Besov wavelet feature maps at physical invariant \beta = 1.50...")
+    # =========================================================
+    # PILLAR 2: WAVELET MAP CALIBRATION (With Chart Advancement)
+    # =========================================================
+    print(f"Calibrating {m} chart-decoupled Besov wavelet feature maps at \beta = {besov_beta:.2f}...")
     chart_wavelet_maps = []
     raw_p_trunc = config['features']['p_trunc']
     is_auto_p = str(raw_p_trunc).strip().lower() in ['auto', 'none', '0']
 
     for i in range(m):
+        sys.stdout.write(f"\r[RKHS Calibration] Calibrated chart {i + 1}/{m} ({(i + 1) / m * 100:.1f}%)")
+        sys.stdout.flush()
+
         U_i = chart_intrinsic_coords[i]
         N_i = U_i.shape[0]
         
@@ -84,8 +102,12 @@ def main():
         model_i.eval()
         chart_wavelet_maps.append(model_i.state_dict())
 
+    sys.stdout.write("\n")
     torch.save(chart_wavelet_maps, os.path.join(args.data_dir, "wavelet_maps_decoupled.pt"))
 
+    # =========================================================
+    # PILLAR 3: VECTOR FIELD REGRESSION (With Step & Chart Advancement)
+    # =========================================================
     s = torch.linspace(0, 1.0, time_steps)
     time_grid = torch.sinh(s * 2.0) / torch.sinh(torch.tensor(2.0))
     all_etas = []
@@ -94,7 +116,12 @@ def main():
     for step in range(time_steps):
         t_val = time_grid[step].item()
         eta_t_local = []
+        
         for i in range(m):
+            # Granular step and chart cross-advancement tracker
+            sys.stdout.write(f"\r[Drift Regression] Step {step + 1}/{time_steps} | Solved chart {i + 1}/{m} ({(step * m + i + 1) / (time_steps * m) * 100:.1f}%)")
+            sys.stdout.flush()
+
             U_i = chart_intrinsic_coords[i]
             Z_i = z_clusters_intrinsic[i]
             
@@ -114,6 +141,7 @@ def main():
 
         all_etas.append(eta_t_local)
 
+    sys.stdout.write("\n[Phase 2 Complete] All local velocity fields successfully serialized.\n")
     torch.save(all_etas, os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"))
 
 if __name__ == "__main__": main()
