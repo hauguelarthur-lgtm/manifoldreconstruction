@@ -30,32 +30,15 @@ def main():
     d = int(chart_intrinsic_coords[0].shape[1])
     N = int(membership_mask.shape[0])
 
-    # ---------------------------------------------------------
-    # AUTOMATED MINIMAX PARAMETER DETERMINATION
-    # ---------------------------------------------------------
-    raw_p_trunc = config['features']['p_trunc']
-    if str(raw_p_trunc).strip().lower() in ['auto', 'none', '0']:
-        max_N_i = max([U.shape[0] for U in chart_intrinsic_coords])
-        if max_N_i > 1:
-            p_trunc_calc = int(max_N_i * math.log(max_N_i))
-        else:
-            p_trunc_calc = 128
-        p_trunc = max(128, min(p_trunc_calc, 5000))
-        p_trunc = (p_trunc // 4) * 4
-        print(f"[DEBUG] Auto p_trunc (P) = {p_trunc} (Based on max patch size {max_N_i})")
-    else:
-        p_trunc = int(float(raw_p_trunc))
+    # IMMUTABLE PHYSICAL CONSTANT OF THE BENAMOU-BRENIER FLOW
+    besov_beta = 1.50
 
     raw_time_steps = config['integration']['time_steps']
     if str(raw_time_steps).strip().lower() in ['auto', 'none', '0']:
-        beta = 1.5
-        exponent = beta / (2.0 * beta + float(d))
-        t_calc = int(15.0 * math.pow(N, exponent))
-        time_steps = max(50, min(t_calc, 2000))*2
-        print(f"[DEBUG] Auto time_steps = {time_steps} (Based on N={N}, d={d}, beta={beta})")
+        exponent = besov_beta / (2.0 * besov_beta + float(d))
+        time_steps = max(50, min(int(15.0 * math.pow(N, exponent)), 2000))
     else:
         time_steps = int(float(raw_time_steps))
-    # ---------------------------------------------------------
 
     print(f"Executing Covariance-Matched Exact Optimal Transport in R^{d}...")
     z_clusters_intrinsic = []
@@ -73,16 +56,35 @@ def main():
 
         cost_matrix_i = torch.cdist(Z_raw_i, U_i, p=2)**2
         plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy())
-        
         z_clusters_intrinsic.append(Z_raw_i[np.argmax(plan_i, axis=0)])
 
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
 
-    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
-    model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
-    model.eval()
+    print(f"Calibrating {m} chart-decoupled Besov wavelet feature maps at physical invariant \beta = 1.50...")
+    chart_wavelet_maps = []
+    raw_p_trunc = config['features']['p_trunc']
+    is_auto_p = str(raw_p_trunc).strip().lower() in ['auto', 'none', '0']
 
-    torch.save(model.state_dict(), os.path.join(args.data_dir, "wavelet_map.pt"))
+    for i in range(m):
+        U_i = chart_intrinsic_coords[i]
+        N_i = U_i.shape[0]
+        
+        if N_i <= 1:
+            chart_wavelet_maps.append(None)
+            continue
+            
+        if is_auto_p:
+            p_calc = int(N_i * math.log(N_i)) if N_i > 1 else 128
+            p_trunc_i = (max(128, min(p_calc, 1024)) // 4) * 4
+        else:
+            p_trunc_i = (int(float(raw_p_trunc)) // 4) * 4
+            
+        model_i = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc_i).to(device)
+        model_i.calibrate(U_i, base_beta=besov_beta)
+        model_i.eval()
+        chart_wavelet_maps.append(model_i.state_dict())
+
+    torch.save(chart_wavelet_maps, os.path.join(args.data_dir, "wavelet_maps_decoupled.pt"))
 
     s = torch.linspace(0, 1.0, time_steps)
     time_grid = torch.sinh(s * 2.0) / torch.sinh(torch.tensor(2.0))
@@ -95,18 +97,22 @@ def main():
         for i in range(m):
             U_i = chart_intrinsic_coords[i]
             Z_i = z_clusters_intrinsic[i]
-            if U_i.shape[0] == 0:
-                eta_t_local.append(torch.zeros((p_trunc, d), device=device))
+            
+            if U_i.shape[0] <= 1 or chart_wavelet_maps[i] is None:
+                eta_t_local.append(torch.zeros((1, d), device=device))
                 continue
-
+                
+            p_i = chart_wavelet_maps[i]['omega'].shape[0]
+            model_i = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_i).to(device)
+            model_i.load_state_dict(chart_wavelet_maps[i])
+            
             eta_t_local.append(solve_local_system(
-                features=model((1.0 - t_val) * Z_i + t_val * U_i),
+                features=model_i((1.0 - t_val) * Z_i + t_val * U_i),
                 target_velocities=U_i - Z_i,
-                rkhs_penalty=model.get_rkhs_penalty()
+                rkhs_penalty=model_i.get_rkhs_penalty()
             ))
 
         all_etas.append(eta_t_local)
-        if (step + 1) % 25 == 0: print(f" Solved step {step + 1}/{time_steps}")
 
     torch.save(all_etas, os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"))
 

@@ -52,11 +52,16 @@ def generate_nonlinear_manifold(num_samples: int, ambient_dim: int, device: torc
     return X
 
 def sample_single_fundamental_surface(N: int, device: torch.device) -> tuple[torch.Tensor, str, str]:
-    """Samples a single compact 2D Riemann surface immersion in base R^4."""
+    """
+    Samples a single compact 2D Riemann surface immersion in base R^4.
+    UPGRADED: Injects severe Extrinsic/Immersion Complexity to challenge the 
+    Fefferman-Whitney local tangent frames and Weingarten normal regression.
+    """
     u = torch.rand(N, device=device)
     v = torch.rand(N, device=device)
     
-    surface_type = torch.randint(0, 5, (1,)).item()
+    # Expanded topological pool: 0-4 (Foundational), 5-7 (Advanced Complex)
+    surface_type = torch.randint(0, 8, (1,)).item()
     
     if surface_type == 0: # Sphere S^2
         g_name, presentation = "Trivial Group {1}", "< 1 | 1 > (Sphere S^2)"
@@ -81,14 +86,53 @@ def sample_single_fundamental_surface(N: int, device: torch.device) -> tuple[tor
         x, y, z = torch.sin(phi)*torch.cos(theta), torch.sin(phi)*torch.sin(theta), torch.cos(phi)
         coords = torch.stack([x**2 - y**2, x*y*2.0, x*z*2.0, y*z*2.0], dim=1)
         
-    else: # Klein Bottle K^2
+    elif surface_type == 4: # Klein Bottle K^2
         g_name, presentation = "Klein Bottle Group", "< a, b | b a b^{-1} a = 1 > (Klein Bottle K^2)"
         theta, phi = 2.0 * np.pi * u, 2.0 * np.pi * v
         r_mob = 1.5 + torch.cos(phi/2.0)*torch.sin(theta) - torch.sin(phi/2.0)*torch.sin(2.0*theta)
         coords = torch.stack([r_mob*torch.cos(phi), r_mob*torch.sin(phi), torch.sin(phi/2.0)*torch.sin(theta) + torch.cos(phi/2.0)*torch.sin(2.0*theta), torch.cos(theta)], dim=1)
+
+    elif surface_type == 5: # Steiner's Roman Surface (Complex RP^2 Immersion)
+        g_name, presentation = "Roman Surface (RP^2)", "< c | c^2 = 1 > (Whitney Umbrella Extrinsic Geometry)"
+        theta, phi = 2.0 * np.pi * u, np.pi * v
+        x = torch.sin(2.0 * phi) * torch.cos(theta)
+        y = torch.sin(2.0 * phi) * torch.sin(theta)
+        z = torch.cos(phi) * torch.sin(2.0 * theta) * torch.sin(phi)
+        w = torch.cos(2.0 * phi) # Orthogonal lift resolves the central 3D singularity
+        coords = torch.stack([x, y, z, w], dim=1) * 2.0
+
+    elif surface_type == 6: # Trefoil Knotted Torus (Extrinsically Complex T^2)
+        g_name, presentation = "Knotted Torus T^2", "< a, b | [a, b] = 1 > (Trefoil Knot Embedding)"
+        t, phi = 2.0 * np.pi * u, 2.0 * np.pi * v
+        # Base Trefoil Knot
+        r_k = 2.0 + torch.cos(3.0 * t)
+        x_k = r_k * torch.cos(2.0 * t)
+        y_k = r_k * torch.sin(2.0 * t)
+        z_k = torch.sin(3.0 * t)
+        # Tubular Frenet-Serret normal extrusion into R^4
+        tube_r = 0.6
+        coords = torch.stack([
+            x_k + tube_r * torch.cos(phi), 
+            y_k + tube_r * torch.sin(phi), 
+            z_k + tube_r * torch.cos(phi) * torch.sin(t), 
+            tube_r * torch.sin(phi) * torch.cos(t)
+        ], dim=1)
+
+    else: # 4D Lissajous Torus (Fully non-degenerate 4D curvatures)
+        g_name, presentation = "4D Lissajous Torus", "< a, b | [a, b] = 1 > (Orthogonally Distributed Curvature)"
+        # Rotates the principal curvatures explicitly into mutually orthogonal planes
+        theta, phi = 2.0 * np.pi * u, 2.0 * np.pi * v
+        coords = torch.stack([
+            torch.cos(theta) * torch.cos(phi),
+            torch.cos(theta) * torch.sin(phi),
+            torch.sin(theta) * torch.cos(phi),
+            torch.sin(theta) * torch.sin(phi)
+        ], dim=1) * 2.0
         
     return coords, g_name, presentation
 
+
+    
 def generate_random_fundamental_product(num_samples: int, ambient_dim: int, num_factors: int, device: torch.device) -> torch.Tensor:
     """
     Constructs an exact Cartesian product manifold M_1 x M_2 x ... x M_k 

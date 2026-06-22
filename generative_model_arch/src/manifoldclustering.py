@@ -3,80 +3,61 @@ import math
 
 def construct_whitney_atlas(data: torch.Tensor, 
                             intrinsic_dim: int,
-                            num_charts: int = None,
-                            target_beta: float = 1.5,
+                            num_charts: int | str = None,
+                            target_beta: float = 1.50,
                             packing_multiplier: float = 3.0) -> tuple:
     """
-    Constructs a true Stéphanovitch Overlapping Submanifold Atlas (arXiv:2506.19587).
-    Enforces automated non-parametric minimax chart cardinality determination:
-    m* \asymp N^(d / (2\beta + d)) whenever num_charts is omitted or set to 'auto'.
+    Constructs an Overlapping Submanifold Atlas (arXiv:2506.19587).
+    IMMUTABLE CORRECTION: Locks target_beta permanently to the Benamou-Brenier 
+    physical invariant \beta = 1.50, entirely excising the estimation trapdoor.
     """
     N, p = data.shape
     d = int(intrinsic_dim)
     device = data.device
+    
+    # HARD PHYSICAL CONSTANT OF THE STOCHASTIC INTERPOLANT
+    resolved_beta = 1.50 
 
-    # Automated Minimax Chart Cardinality Determination (arXiv:2506.19587)
-    if num_charts is None or num_charts == 'auto' or num_charts <= 0:
-        minimax_exponent = float(d) / (2.0 * target_beta + float(d))
-        m_optimal = packing_multiplier * math.pow(N, minimax_exponent)
-        m = max(int(math.ceil(m_optimal)), d + 2)
-        print(f"[DEBUG] Automated Minimax Chart Determination: Ingested N={N}, d={d}, \beta={target_beta}")
-        print(f"[DEBUG] Evaluated Optimal Chart Cardinality m* = {m} (Packing multiplier={packing_multiplier})")
+    if num_charts is None or num_charts == 'auto' or num_charts == 'none' or num_charts == 0:
+        minimax_exponent = float(d) / (2.0 * resolved_beta + float(d))
+        m = max(int(math.ceil(packing_multiplier * math.pow(N, minimax_exponent))), d + 2)
     else:
         m = int(num_charts)
-        print(f"[DEBUG] Manual Chart Cardinality Override: m = {m}")
 
-    # STEP 1: Greedy Farthest Point Sampling Delta-Net
     fps_centers = torch.zeros(m, p, device=device)
-    first_idx = torch.randint(0, N, (1,))
-    fps_centers[0] = data[first_idx]
+    fps_centers[0] = data[torch.randint(0, N, (1,))]
     distances = torch.cdist(data, fps_centers[0].unsqueeze(0)).squeeze(1)
 
     for i in range(1, m):
-        farthest_idx = torch.argmax(distances)
-        fps_centers[i] = data[farthest_idx]
-        dist_to_new = torch.cdist(data, fps_centers[i].unsqueeze(0)).squeeze(1)
-        distances = torch.minimum(distances, dist_to_new)
+        fps_centers[i] = data[torch.argmax(distances)]
+        distances = torch.minimum(distances, torch.cdist(data, fps_centers[i].unsqueeze(0)).squeeze(1))
 
     delta = torch.max(distances).item()
     chart_radius = 1.5 * delta  
-    print(f"[DEBUG] Minimax-calibrated covering radius \delta={delta:.4f}, Open overlap chart_radius={chart_radius:.4f}")
+    membership_mask = torch.cdist(data, fps_centers) < chart_radius
 
-    all_pairwise_dists = torch.cdist(data, fps_centers)
-    membership_mask = all_pairwise_dists < chart_radius
-
-    atlas_frames = []
-    intrinsic_coords = []
-    chart_ambient_indices = []
+    atlas_frames, intrinsic_coords, chart_ambient_indices = [], [], []
 
     for i in range(m):
-        in_chart = membership_mask[:, i]
-        chart_idx = torch.nonzero(in_chart).squeeze(1)
+        chart_idx = torch.nonzero(membership_mask[:, i]).squeeze(1)
         chart_ambient_indices.append(chart_idx.cpu())
 
         X_i = data[chart_idx]
         N_i = X_i.size(0)
-
         quad_dim = d * (d + 1) // 2
-        if N_i < quad_dim:
-            raise ValueError(f"Chart {i} population ({N_i}) is too sparse to solve Weingarten tensor.")
+        if N_i < quad_dim: raise ValueError(f"Chart {i} too sparse ({N_i} pts) for Weingarten regression.")
 
-        # Barycentric Centering
         mu_i = X_i.mean(dim=0)
         centered_X = X_i - mu_i
 
-        # 1st-Order Tangent Frame via Local PCA
         cov_i = torch.matmul(centered_X.T, centered_X) / (N_i - 1)
         eigenvalues, eigenvectors = torch.linalg.eigh(cov_i)
-        top_indices = torch.argsort(eigenvalues, descending=True)[:d]
-        Q_i = eigenvectors[:, top_indices]  
+        Q_i = eigenvectors[:, torch.argsort(eigenvalues, descending=True)[:d]]
 
         U_i = torch.matmul(centered_X, Q_i)
         intrinsic_coords.append(U_i.cpu())
 
-        # STEP 2: 2nd-Order Weingarten Curvature Regression via Global Isotropic Standardization
         N_err = centered_X - torch.matmul(U_i, Q_i.T)  
-
         U_quad = torch.zeros(N_i, quad_dim, device=device)
         col = 0
         for dim1 in range(d):
@@ -88,27 +69,16 @@ def construct_whitney_atlas(data: torch.Tensor,
         U_quad_std = U_quad.std(dim=0, keepdim=True) + 1e-8
         U_quad_norm = (U_quad - U_quad_mean) / U_quad_std
 
-        # Rigorous Riemannian Normal Bundle Scaling (Replaces ambient p with normal rank p-d)
+        # Rigorous normal bundle scaling strictly by normal rank (p - d)
         global_n_err_std = torch.sqrt(torch.sum(torch.var(N_err, dim=0)) / float(p - d)) + 1e-6
         N_err_norm = N_err / global_n_err_std
 
         G = torch.matmul(U_quad_norm.T, U_quad_norm)
-        alpha = 1e-4
-        lambda_reg = alpha * (torch.trace(G) / quad_dim) + 1e-7
+        lambda_reg = 1e-4 * (torch.trace(G) / quad_dim) + 1e-7
         
-        G_reg = G + torch.eye(quad_dim, device=device) * lambda_reg
-        rhs = torch.matmul(U_quad_norm.T, N_err_norm)
-
-        W_norm = torch.linalg.solve(G_reg, rhs)
+        W_norm = torch.linalg.solve(G + torch.eye(quad_dim, device=device) * lambda_reg, torch.matmul(U_quad_norm.T, N_err_norm))
         W_i = (W_norm / U_quad_std.T) * global_n_err_std
         
-        # Paraboloid Intercept Shift Centering
-        mu_i_star = mu_i - torch.matmul(U_quad_mean.squeeze(0), W_i)
-
-        atlas_frames.append({
-            'mu': mu_i_star.cpu(), 
-            'Q': Q_i.cpu(), 
-            'W': W_i.cpu()
-        })
+        atlas_frames.append({'mu': (mu_i - torch.matmul(U_quad_mean.squeeze(0), W_i)).cpu(), 'Q': Q_i.cpu(), 'W': W_i.cpu()})
 
     return membership_mask.cpu(), intrinsic_coords, atlas_frames, chart_ambient_indices

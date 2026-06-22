@@ -34,7 +34,6 @@ def main():
     d = int(config['manifold']['intrinsic_dim'])
     num_samples = int(config['manifold']['num_samples'])
 
-    # Load Full Geometric Artifact Suite
     data_ambient = torch.load(os.path.join(args.data_dir, "data.pt"), map_location=device)
     chart_ambient_indices = torch.load(os.path.join(args.data_dir, "chart_ambient_indices.pt"), map_location='cpu')
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
@@ -44,23 +43,36 @@ def main():
     precomputed_etas = torch.load(os.path.join(args.data_dir, "precomputed_etas_intrinsic.pt"), map_location=device)
     
     m = len(whitney_atlas)
-    if len(z_clusters_intrinsic) != m:
-        raise RuntimeError(f"Fatal Desync: whitney_atlas contains {m} charts, but z_clusters_intrinsic "
-                           f"contains {len(z_clusters_intrinsic)} slices. Re-execute scripts/02_solve_velocities.py.")
-
     time_steps = len(precomputed_etas)
-    p_trunc = 256 
-    for eta_local in precomputed_etas[0]:
-        if eta_local.shape[0] > 0:
-            p_trunc = eta_local.shape[0]
-            break
+
+    # --- LOAD CHART-DECOUPLED FEATURE MAPS ---
+    decoupled_maps_path = os.path.join(args.data_dir, "wavelet_maps_decoupled.pt")
+    global_map_path = os.path.join(args.data_dir, "wavelet_map.pt")
+    chart_models = []
+
+    if os.path.exists(decoupled_maps_path):
+        print("[DEBUG] Loading chart-decoupled Besov feature maps -> wavelet_maps_decoupled.pt")
+        state_dicts = torch.load(decoupled_maps_path, map_location=device)
+        for i in range(m):
+            if state_dicts[i] is not None:
+                p_i = state_dicts[i]['omega'].shape[0]
+                model_i = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_i).to(device)
+                model_i.load_state_dict(state_dicts[i])
+                chart_models.append(model_i)
+            else:
+                chart_models.append(None)
+    elif os.path.exists(global_map_path):
+        print("[DEBUG] Loading single global Besov feature map -> wavelet_map.pt (Legacy fallback)")
+        global_sd = torch.load(global_map_path, map_location=device)
+        p_glob = global_sd['omega'].shape[0]
+        glob_model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_glob).to(device)
+        glob_model.load_state_dict(global_sd)
+        chart_models = [glob_model] * m
+    else:
+        raise FileNotFoundError("Fatal: Neither wavelet_maps_decoupled.pt nor wavelet_map.pt found. Run scripts/02_solve_velocities.py.")
 
     chart_probs = membership_mask.sum(dim=0).float() / membership_mask.sum()
     chart_assignments = torch.multinomial(chart_probs, num_samples, replacement=True)
-
-    model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
-    wavelet_map_path = os.path.join(args.data_dir, "wavelet_map.pt")
-    model.load_state_dict(torch.load(wavelet_map_path, map_location=device))
 
     Z_0_list = []
     for i in range(m):
@@ -68,22 +80,17 @@ def main():
         U_train_i = chart_intrinsic_coords[i].to(device)
         n_gen_i = int((chart_assignments == i).sum().item())
         
-        if Z_train_i.shape[0] > 0 and U_train_i.shape[0] > 0:
-            # 1. Total Ambient Empirical Energy (||X_i - mu_i||_F^2)
+        if Z_train_i.shape[0] > 0 and U_train_i.shape[0] > 0 and chart_models[i] is not None:
             idx_i = chart_ambient_indices[i].long().to(device)
             X_i = data_ambient[idx_i]
             mu_i = X_i.mean(dim=0, keepdim=True)
             var_ambient = torch.sum((X_i - mu_i)**2)
-            
-            # 2. Projected 1st-Order Intrinsic Energy (||U_i||_F^2)
             var_intrinsic = torch.sum(U_train_i**2)
             
-            # 3. Captured 2nd-Order Weingarten Energy (||U_quad W_i||_F^2)
-            U_quad_i = formulate_quadratic_features(U_train_i)
             W_i = whitney_atlas[i]['W'].to(device)
+            U_quad_i = formulate_quadratic_features(U_train_i)
             var_quad = torch.sum(torch.matmul(U_quad_i, W_i)**2)
             
-            # 4. Rigorous Pythagorean Energy Conservation Scalar (\gamma_i)
             if var_intrinsic > 1e-4:
                 energy_ratio = (var_ambient - var_quad) / var_intrinsic
                 gamma_i = float(torch.sqrt(torch.clamp(energy_ratio, min=1.0)).item())
@@ -91,7 +98,6 @@ def main():
                 gamma_i = 1.0
 
             std_U_i = (Z_train_i.std(dim=0, keepdim=True).to(device) * gamma_i) if Z_train_i.shape[0] > 1 else torch.ones((1, d), device=device)
-            
             z_min = Z_train_i.min(dim=0).values.to(device) * gamma_i
             z_max = Z_train_i.max(dim=0).values.to(device) * gamma_i
             
@@ -102,15 +108,42 @@ def main():
             Z_0_list.append(torch.zeros((n_gen_i, d), device=device))
 
     print(f"Executing Calibrated RKHS Intrinsic Integration in R^{d}...")
-    U_gen_list = generate_samples(Z_0_list, model, precomputed_etas, time_steps, device, args.ode_mode)
+    U_gen_list = generate_samples(Z_0_list, chart_models, precomputed_etas, time_steps, device, args.ode_mode)
 
-    print("Executing 2nd-Order Weingarten Affine Lift...")
+    print("Executing 2nd-Order Weingarten Affine Lift with Arc-to-Chord Dilation...")
     X_lift_list = []
     for i in range(m):
         if U_gen_list[i].size(0) == 0: continue
-        X_lift_list.append(torch.matmul(U_gen_list[i], whitney_atlas[i]['Q'].to(device).T) + 
-                           torch.matmul(formulate_quadratic_features(U_gen_list[i]), whitney_atlas[i]['W'].to(device)) + 
-                           whitney_atlas[i]['mu'].to(device))
+        
+        U_train_i = chart_intrinsic_coords[i].to(device)
+        idx_i = chart_ambient_indices[i].long().to(device)
+        X_i = data_ambient[idx_i]
+        
+        if U_train_i.shape[0] > 1 and X_i.shape[0] > 1:
+            mu_i = X_i.mean(dim=0, keepdim=True)
+            var_ambient = torch.sum((X_i - mu_i)**2)
+            var_intrinsic = torch.sum(U_train_i**2)
+            
+            W_i = whitney_atlas[i]['W'].to(device)
+            U_quad_i = formulate_quadratic_features(U_train_i)
+            var_quad = torch.sum(torch.matmul(U_quad_i, W_i)**2)
+            
+            if var_intrinsic > 1e-4:
+                energy_ratio = (var_ambient - var_quad) / var_intrinsic
+                gamma_i = float(torch.sqrt(torch.clamp(energy_ratio, min=1.0)).item())
+            else:
+                gamma_i = 1.0
+        else:
+            gamma_i = 1.0
+            W_i = whitney_atlas[i]['W'].to(device)
+
+        U_gen_dilated = U_gen_list[i] * gamma_i
+        U_gen_quad = formulate_quadratic_features(U_gen_dilated)
+        
+        X_lift = (torch.matmul(U_gen_dilated, whitney_atlas[i]['Q'].to(device).T) + 
+                  torch.matmul(U_gen_quad, W_i) + 
+                  whitney_atlas[i]['mu'].to(device))
+        X_lift_list.append(X_lift)
 
     output_path = os.path.join(args.data_dir, "generated_samples.pt")
     torch.save(torch.cat(X_lift_list, dim=0).cpu(), output_path)
