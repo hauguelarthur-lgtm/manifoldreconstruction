@@ -1,167 +1,177 @@
 import torch
 import os
+import sys
 import argparse
 import yaml
 import numpy as np
 
-def apply_isometric_embedding(data: torch.Tensor, ambient_dim: int) -> torch.Tensor:
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "scripts" else script_dir
+sys.path.insert(0, project_root) if project_root not in sys.path else None
+
+def generate_swiss_roll(num_samples: int, ambient_dim: int, device: torch.device) -> torch.Tensor:
+    t = 1.5 * np.pi * (1.0 + 2.0 * torch.rand(num_samples, device=device))
+    height = 21.0 * torch.rand(num_samples, device=device)
+    coords = torch.zeros(num_samples, ambient_dim, device=device)
+    coords[:, 0] = t * torch.cos(t)
+    coords[:, 1] = height
+    coords[:, 2] = t * torch.sin(t)
+    return coords
+
+def generate_torus(num_samples: int, ambient_dim: int, device: torch.device) -> torch.Tensor:
+    u = torch.rand(num_samples, device=device) * 2.0 * np.pi
+    v = torch.rand(num_samples, device=device) * 2.0 * np.pi
+    R, r = 2.0, 0.5
+    coords = torch.zeros(num_samples, ambient_dim, device=device)
+    coords[:, 0] = (R + r * torch.cos(v)) * torch.cos(u)
+    coords[:, 1] = (R + r * torch.cos(v)) * torch.sin(u)
+    coords[:, 2] = r * torch.sin(v)
+    return coords
+
+def generate_sphere(num_samples: int, ambient_dim: int, device: torch.device) -> torch.Tensor:
+    u = torch.rand(num_samples, device=device)
+    v = torch.rand(num_samples, device=device)
+    theta = u * 2.0 * np.pi
+    phi = torch.acos(2.0 * v - 1.0)
+    coords = torch.zeros(num_samples, ambient_dim, device=device)
+    coords[:, 0] = torch.sin(phi) * torch.cos(theta)
+    coords[:, 1] = torch.sin(phi) * torch.sin(theta)
+    coords[:, 2] = torch.cos(phi)
+    return coords
+
+def generate_nonlinear_manifold(num_samples: int, ambient_dim: int, device: torch.device) -> torch.Tensor:
+    d = 3
+    if ambient_dim < 3 * d:
+        raise ValueError(f"Nonlinear manifold requires ambient_dim >= {3 * d}")
+    Z = torch.randn(num_samples, d, device=device)
+    X = torch.zeros(num_samples, ambient_dim, device=device)
+    X[:, :d] = Z
+    for j in range(d):
+        X[:, d + j] = torch.sin(2.0 * Z[:, j])
+        X[:, 2 * d + j] = torch.cos(3.0 * Z[:, j])
+    return X
+
+def sample_single_fundamental_surface(N: int, device: torch.device) -> tuple[torch.Tensor, str, str]:
+    """Samples a single compact 2D Riemann surface immersion in base R^4."""
+    u = torch.rand(N, device=device)
+    v = torch.rand(N, device=device)
+    
+    surface_type = torch.randint(0, 5, (1,)).item()
+    
+    if surface_type == 0: # Sphere S^2
+        g_name, presentation = "Trivial Group {1}", "< 1 | 1 > (Sphere S^2)"
+        theta = 2.0 * np.pi * u
+        phi = torch.acos(2.0 * v - 1.0)
+        coords = torch.stack([torch.sin(phi)*torch.cos(theta), torch.sin(phi)*torch.sin(theta), torch.cos(phi), torch.zeros(N, device=device)], dim=1)
+        
+    elif surface_type == 1: # Torus T^2
+        g_name, presentation = "Free Abelian Z^2", "< a, b | [a, b] = 1 > (Torus T^2)"
+        theta, phi = 2.0 * np.pi * u, 2.0 * np.pi * v
+        coords = torch.stack([torch.cos(theta), torch.sin(theta), torch.cos(phi), torch.sin(phi)], dim=1)
+        
+    elif surface_type == 2: # Double Torus \Sigma_2
+        g_name, presentation = "Surface Group \pi_1(\Sigma_2)", "< a1,b1,a2,b2 | [a1,b1][a2,b2]=1 > (Double Torus)"
+        theta, phi = 2.0 * np.pi * u, 2.0 * np.pi * v
+        r_tube = 0.4 + 0.2 * torch.sin(2.0 * theta)
+        coords = torch.stack([(2.0 + r_tube*torch.cos(phi))*torch.cos(theta), (2.0 + r_tube*torch.cos(phi))*torch.sin(theta), r_tube*torch.sin(phi), torch.sin(3.0*theta)*0.3], dim=1)
+        
+    elif surface_type == 3: # Real Projective Plane RP^2
+        g_name, presentation = "Cyclic Group Z_2", "< c | c^2 = 1 > (Real Projective Plane RP^2)"
+        theta, phi = 2.0 * np.pi * u, np.pi * v
+        x, y, z = torch.sin(phi)*torch.cos(theta), torch.sin(phi)*torch.sin(theta), torch.cos(phi)
+        coords = torch.stack([x**2 - y**2, x*y*2.0, x*z*2.0, y*z*2.0], dim=1)
+        
+    else: # Klein Bottle K^2
+        g_name, presentation = "Klein Bottle Group", "< a, b | b a b^{-1} a = 1 > (Klein Bottle K^2)"
+        theta, phi = 2.0 * np.pi * u, 2.0 * np.pi * v
+        r_mob = 1.5 + torch.cos(phi/2.0)*torch.sin(theta) - torch.sin(phi/2.0)*torch.sin(2.0*theta)
+        coords = torch.stack([r_mob*torch.cos(phi), r_mob*torch.sin(phi), torch.sin(phi/2.0)*torch.sin(theta) + torch.cos(phi/2.0)*torch.sin(2.0*theta), torch.cos(theta)], dim=1)
+        
+    return coords, g_name, presentation
+
+def generate_random_fundamental_product(num_samples: int, ambient_dim: int, num_factors: int, device: torch.device) -> torch.Tensor:
     """
-    Entangles a locally-spanned manifold across the full ambient space R^p 
-    via a random orthogonal transformation SO(p), strictly preserving intrinsic geodesics.
+    Constructs an exact Cartesian product manifold M_1 x M_2 x ... x M_k 
+    by orthogonally stacking sampled fundamental groups in base R^(4k).
     """
-    # 1. Sample from the standard normal to establish a rotation basis
-    H = torch.randn(ambient_dim, ambient_dim)
+    N = num_samples
+    k = num_factors
+    stacked_base_dim = 4 * k
     
-    # 2. Extract orthogonal matrix Q via QR factorization (samples from the Haar measure on O(p))
-    Q, R = torch.linalg.qr(H)
+    if ambient_dim < stacked_base_dim:
+        raise ValueError(f"Fatal: ambient_dim ({ambient_dim}) must be >= 4 * num_factors ({stacked_base_dim}) "
+                         f"to support orthogonal subspace immersion stacking.")
+
+    print(f"\n[DEBUG] --- CONSTRUCTING CARTESIAN PRODUCT OF {k} FUNDAMENTAL GROUPS ---")
+    component_coords = []
+    group_names = []
     
-    # 3. Enforce the Special Orthogonal SO(p) constraint (det(Q) = 1) 
-    # This prevents orientation-reversing reflections that alter topological handedness.
-    D = torch.diag(torch.sign(torch.diag(R)))
-    Q = torch.matmul(Q, D)
+    for r in range(k):
+        coords_r, g_name_r, pres_r = sample_single_fundamental_surface(N, device)
+        component_coords.append(coords_r)
+        group_names.append(g_name_r)
+        print(f"[DEBUG] Factor {r+1} (\pi_1) : {g_name_r} | Presentation: {pres_r}")
+
+    print(f"[DEBUG] Direct Product \pi_1(M) : {' x '.join(group_names)}")
+    print(f"[DEBUG] True Intrinsic Rank (d): {2 * k}")
+
+    # 1. Orthogonal Subspace Stacking along columns
+    base_product_coords = torch.cat(component_coords, dim=1)  # Shape: (N, 4k)
+
+    # 2. Coupled Multiscale Diffeomorphic Metric Dilation G_{ij}(x)
+    print(f"[DEBUG] Applying coupled multiscale Fourier metric deformation across R^{stacked_base_dim}...")
+    torch.manual_seed(torch.randint(0, 10000, (1,)).item())
+    A_def = torch.randn(stacked_base_dim, stacked_base_dim, device=device) * 0.20
+    omega_def = torch.randn(stacked_base_dim, stacked_base_dim, device=device) * (2.0 / float(np.sqrt(k)))
+    phase_def = torch.rand(stacked_base_dim, device=device) * 2.0 * np.pi
     
-    # 4. Apply global isometric rotation
-    return torch.matmul(data, Q)
+    deformed_coords = base_product_coords + torch.matmul(torch.sin(torch.matmul(base_product_coords, omega_def) + phase_def), A_def)
+    deformed_coords = deformed_coords - deformed_coords.mean(dim=0, keepdim=True)
 
-def generate_nonlinear_manifold(n_samples: int, intrinsic_dim: int, ambient_dim: int) -> torch.Tensor:
-    if ambient_dim < intrinsic_dim * 3:
-        raise ValueError("Ambient dimension 'p' must be at least 3x intrinsic dimension 'd'.")
-    Z = (torch.rand(n_samples, intrinsic_dim) * 2 - 1) * torch.pi
-    X_ambient = torch.zeros(n_samples, ambient_dim)
-    for i in range(intrinsic_dim):
-        X_ambient[:, i] = Z[:, i]
-        X_ambient[:, intrinsic_dim + i] = torch.sin(Z[:, i])
-        X_ambient[:, 2 * intrinsic_dim + i] = torch.cos(Z[:, i])
-    remaining_dims = ambient_dim - (3 * intrinsic_dim)
-    for j in range(remaining_dims):
-        idx1 = j % intrinsic_dim
-        idx2 = (j + 1) % intrinsic_dim
-        X_ambient[:, 3 * intrinsic_dim + j] = Z[:, idx1] * torch.sin(Z[:, idx2])
-    return X_ambient
+    # 3. Haar Orthogonal Ambient Entanglement SO(p)
+    print(f"[DEBUG] Lifting {2*k}D intrinsic product into ambient R^{ambient_dim} via Haar rotation SO({ambient_dim})...")
+    Q_random, _ = torch.linalg.qr(torch.randn(ambient_dim, ambient_dim, device=device))
+    
+    padded_coords = torch.zeros(N, ambient_dim, device=device)
+    padded_coords[:, :stacked_base_dim] = deformed_coords
 
-def generate_analytical_sphere(n_samples: int, ambient_dim: int) -> torch.Tensor:
-    z = torch.rand(n_samples) * 2 - 1
-    phi = torch.rand(n_samples) * 2 * np.pi
-    r_xy = torch.sqrt(1 - z**2)
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, 0] = r_xy * torch.cos(phi)
-    data[:, 1] = r_xy * torch.sin(phi)
-    data[:, 2] = z
-    return data
-
-def generate_analytical_torus(n_samples: int, ambient_dim: int, R: float = 2.0, r: float = 1.0) -> torch.Tensor:
-    samples = []
-    collected = 0
-    while collected < n_samples:
-        # Over-sample batched distributions to account for rejection rate
-        guess_n = n_samples - collected
-        theta = torch.rand(guess_n * 2) * 2 * torch.pi
-        phi = torch.rand(guess_n * 2) * 2 * torch.pi
-        
-        p_accept = (R + r * torch.cos(theta)) / (R + r)
-        accept = torch.rand(guess_n * 2) < p_accept
-        
-        valid_theta = theta[accept]
-        valid_phi = phi[accept]
-        
-        # Vectorized coordinate computation
-        x = (R + r * torch.cos(valid_theta)) * torch.cos(valid_phi)
-        y = (R + r * torch.cos(valid_theta)) * torch.sin(valid_phi)
-        z = r * torch.sin(valid_theta)
-        
-        batch = torch.stack([x, y, z], dim=1)
-        samples.append(batch)
-        collected += batch.shape[0]
-        
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, :3] = torch.cat(samples, dim=0)[:n_samples]
-    return data
-
-def generate_klein_bottle(n_samples: int, ambient_dim: int) -> torch.Tensor:
-    if ambient_dim < 4:
-        raise ValueError("Klein Bottle embedding requires an ambient dimension 'p' of at least 4.")
-    u = torch.rand(n_samples) * 2 * torch.pi
-    v = torch.rand(n_samples) * 2 * torch.pi
-    R, r = 2.0, 1.0
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, 0] = (R + r * torch.cos(v)) * torch.cos(u)
-    data[:, 1] = (R + r * torch.cos(v)) * torch.sin(u)
-    data[:, 2] = r * torch.sin(v) * torch.cos(u / 2)
-    data[:, 3] = r * torch.sin(v) * torch.sin(u / 2)
-    return data
-
-def generate_swiss_roll(n_samples: int, ambient_dim: int) -> torch.Tensor:
-    if ambient_dim < 3:
-        raise ValueError("Swiss Roll embedding requires an ambient dimension 'p' of at least 3.")
-    t = (torch.rand(n_samples) * 3 * torch.pi) + 1.5 * torch.pi
-    y = torch.rand(n_samples) * 21.0
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, 0] = t * torch.cos(t)
-    data[:, 1] = y
-    data[:, 2] = t * torch.sin(t)
-    return data
-
-def generate_n_sphere(n_samples: int, intrinsic_dim: int, ambient_dim: int) -> torch.Tensor:
-    if ambient_dim < intrinsic_dim + 1:
-        raise ValueError("Ambient dimension 'p' must be at least d + 1 for an S^d sphere.")
-    gaussian_samples = torch.randn(n_samples, intrinsic_dim + 1)
-    spherical_samples = gaussian_samples / torch.norm(gaussian_samples, dim=1, keepdim=True)
-    data = torch.zeros(n_samples, ambient_dim)
-    data[:, :intrinsic_dim + 1] = spherical_samples
-    return data
+    X_ambient = torch.matmul(padded_coords, Q_random.T)
+    return X_ambient.float()
 
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    if os.path.basename(script_dir) == "scripts":
-        project_root = os.path.dirname(script_dir)
-    else:
-        project_root = script_dir
-
-    default_config_path = os.path.join(project_root, "configs", "default_config.yaml")
-    default_output_dir = os.path.join(project_root, "data", "raw")
-
-    parser = argparse.ArgumentParser(description="Generates synthetic manifold data.")
-    parser.add_argument("--config", type=str, default=default_config_path)
-    parser.add_argument("--output_dir", type=str, default=default_output_dir)
-    parser.add_argument("--topology", type=str, 
-                        choices=['default', 'sphere', 'torus', 'klein', 'swiss_roll', 'n_sphere'], 
-                        default='default')
+    parser = argparse.ArgumentParser(description="Generates raw ambient submanifolds.")
+    parser.add_argument("--topology", type=str, default="default", choices=["swiss_roll", "torus", "sphere", "default", "random_fundamental", "random_fundamental_product"])
+    parser.add_argument("--product_factors", type=int, default=2, help="Number of Cartesian product factors k (Intrinsic rank = 2k).")
+    parser.add_argument("--output_dir", type=str, default=os.path.join(project_root, "data", "raw"))
+    parser.add_argument("--config", type=str, default=os.path.join(project_root, "configs", "default_config.yaml"))
     args = parser.parse_args()
 
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
-
-    p = config['manifold']['ambient_dim']
-    d = config['manifold']['intrinsic_dim']
-    N = config['manifold']['num_samples']
-
+    with open(args.config, 'r') as f: config = yaml.safe_load(f)
+    num_samples = int(config['manifold']['num_samples'])
+    ambient_dim = int(config['manifold']['ambient_dim'])
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     os.makedirs(args.output_dir, exist_ok=True)
-    print(f"Generating empirical dataset: Topology={args.topology.upper()}, N={N}, Ambient Dim={p}")
-    
-    # 1. Topological mapping
-    if args.topology == 'sphere':
-        data = generate_analytical_sphere(N, p)
-    elif args.topology == 'torus':
-        data = generate_analytical_torus(N, p)
-    elif args.topology == 'klein':
-        data = generate_klein_bottle(N, p)
-    elif args.topology == 'swiss_roll':
-        data = generate_swiss_roll(N, p)
-    elif args.topology == 'n_sphere':
-        data = generate_n_sphere(N, d, p)
-    else:
-        data = generate_nonlinear_manifold(N, d, p)
-    
-    # 2. Subspace entangling
-    if args.topology in ['sphere', 'torus', 'klein', 'swiss_roll', 'n_sphere']:
-        print(f"Applying SO({p}) isometric transformation to entangle ambient coordinates...")
-        data = apply_isometric_embedding(data, p)
-    
-    # 3. Serialization
-    output_path = os.path.join(args.output_dir, "dataset.pt")
-    data = data - data.mean(dim=0) # Add this BEFORE saving
-    torch.save(data, output_path)
-    print(f"Empirical data tensor saved to {output_path}")
 
-if __name__ == "__main__":
-    main()
+    if args.topology == "swiss_roll":
+        dataset = generate_swiss_roll(num_samples, ambient_dim, device)
+    elif args.topology == "torus":
+        dataset = generate_torus(num_samples, ambient_dim, device)
+    elif args.topology == "sphere":
+        dataset = generate_sphere(num_samples, ambient_dim, device)
+    elif args.topology == "random_fundamental":
+        coords, _, _ = sample_single_fundamental_surface(num_samples, device)
+        padded = torch.zeros(num_samples, ambient_dim, device=device)
+        padded[:, :4] = coords
+        Q, _ = torch.linalg.qr(torch.randn(ambient_dim, ambient_dim, device=device))
+        dataset = torch.matmul(padded, Q.T).float()
+    elif args.topology == "random_fundamental_product":
+        dataset = generate_random_fundamental_product(num_samples, ambient_dim, args.product_factors, device)
+    else:
+        dataset = generate_nonlinear_manifold(num_samples, ambient_dim, device)
+
+    output_path = os.path.join(args.output_dir, "dataset.pt")
+    torch.save(dataset.cpu(), output_path)
+    print(f"Successfully generated {args.topology} ({dataset.shape}) -> {output_path}")
+
+if __name__ == "__main__": main()

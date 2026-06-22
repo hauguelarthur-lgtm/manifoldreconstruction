@@ -5,6 +5,7 @@ import argparse
 import ot
 import yaml
 import numpy as np
+import math
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "scripts" else script_dir
@@ -20,8 +21,6 @@ def main():
     args = parser.parse_args()
 
     with open(args.config, 'r') as f: config = yaml.safe_load(f)
-    p_trunc = int(config['features']['p_trunc'])
-    time_steps = int(config['integration']['time_steps'])
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location='cpu')
@@ -29,6 +28,34 @@ def main():
     
     m = int(membership_mask.shape[1])
     d = int(chart_intrinsic_coords[0].shape[1])
+    N = int(membership_mask.shape[0])
+
+    # ---------------------------------------------------------
+    # AUTOMATED MINIMAX PARAMETER DETERMINATION
+    # ---------------------------------------------------------
+    raw_p_trunc = config['features']['p_trunc']
+    if str(raw_p_trunc).strip().lower() in ['auto', 'none', '0']:
+        max_N_i = max([U.shape[0] for U in chart_intrinsic_coords])
+        if max_N_i > 1:
+            p_trunc_calc = int(max_N_i * math.log(max_N_i))
+        else:
+            p_trunc_calc = 128
+        p_trunc = max(128, min(p_trunc_calc, 5000))
+        p_trunc = (p_trunc // 4) * 4
+        print(f"[DEBUG] Auto p_trunc (P) = {p_trunc} (Based on max patch size {max_N_i})")
+    else:
+        p_trunc = int(float(raw_p_trunc))
+
+    raw_time_steps = config['integration']['time_steps']
+    if str(raw_time_steps).strip().lower() in ['auto', 'none', '0']:
+        beta = 1.5
+        exponent = beta / (2.0 * beta + float(d))
+        t_calc = int(15.0 * math.pow(N, exponent))
+        time_steps = max(50, min(t_calc, 2000))*2
+        print(f"[DEBUG] Auto time_steps = {time_steps} (Based on N={N}, d={d}, beta={beta})")
+    else:
+        time_steps = int(float(raw_time_steps))
+    # ---------------------------------------------------------
 
     print(f"Executing Covariance-Matched Exact Optimal Transport in R^{d}...")
     z_clusters_intrinsic = []
@@ -45,9 +72,8 @@ def main():
         Z_raw_i = torch.randn((N_i, d), device=device) * std_U_i
 
         cost_matrix_i = torch.cdist(Z_raw_i, U_i, p=2)**2
-        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy(), numItermax=1000000)
+        plan_i = ot.emd(np.ones(N_i)/N_i, np.ones(N_i)/N_i, cost_matrix_i.cpu().numpy())
         
-        # Column-Wise Argmax pairs target U_k to correct Z_k
         z_clusters_intrinsic.append(Z_raw_i[np.argmax(plan_i, axis=0)])
 
     torch.save([z.cpu() for z in z_clusters_intrinsic], os.path.join(args.data_dir, "z_clusters_intrinsic.pt"))
@@ -56,12 +82,10 @@ def main():
     model.calibrate(torch.cat(chart_intrinsic_coords, dim=0))
     model.eval()
 
-    # CRITICAL MATHEMATICAL FIX 1: Serialize the calibrated wavelet frequencies and biases
-    # Prevents Stage 03 from evaluating vector fields against re-randomized white noise.
     torch.save(model.state_dict(), os.path.join(args.data_dir, "wavelet_map.pt"))
-    print("Serialized calibrated Besov wavelet map state -> wavelet_map.pt")
 
-    time_grid = torch.linspace(0, 1.0 - 1e-5, time_steps)
+    s = torch.linspace(0, 1.0, time_steps)
+    time_grid = torch.sinh(s * 2.0) / torch.sinh(torch.tensor(2.0))
     all_etas = []
 
     print(f"Regressing {m} Besov-regularized vector fields across {time_steps} steps...")

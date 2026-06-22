@@ -47,22 +47,50 @@ def compute_mmd_adaptive(X: torch.Tensor, Y: torch.Tensor) -> float:
     mmd_squared = K_XX + K_YY - 2.0 * K_XY
     return float(torch.sqrt(torch.clamp(mmd_squared, min=1e-8)))
 
-def compute_exact_w2(X: torch.Tensor, Y: torch.Tensor) -> float:
+import torch
+import numpy as np
+import ot
+
+def compute_true_wasserstein_metrics(X: torch.Tensor, Y: torch.Tensor, max_eval_samples: int = 10000) -> dict[str, float]:
     """
-    Computes the exact 2-Wasserstein (W2) transport metric via Network Simplex Optimal Transport.
-    Directly evaluates the kinetic transport bounds established in Coeurdoux et al. (arXiv:2602.20070).
+    Computes exact non-asymptotic True 1-Wasserstein (W1) and True 2-Wasserstein (W2) 
+    transport metrics via the Network Simplex algorithm (arXiv:2506.19587, Section 5.2.2).
+    Operates across the full empirical support without finite-sample subsampling attenuation.
     """
     X_np = X.detach().cpu().numpy()
     Y_np = Y.detach().cpu().numpy()
 
-    # Evaluate across uniform 2500-point subsets to ensure CPU simplex solver stability
-    N_eval = min(X_np.shape[0], Y_np.shape[0], 2500)
-    idx_X = np.random.choice(X_np.shape[0], N_eval, replace=False)
-    idx_Y = np.random.choice(Y_np.shape[0], N_eval, replace=False)
+    # Ensure balanced marginal mass; evaluate up to full N=5000 support
+    N_eval = min(X_np.shape[0], Y_np.shape[0], max_eval_samples)
+    
+    if X_np.shape[0] > N_eval:
+        idx_X = np.random.choice(X_np.shape[0], N_eval, replace=False)
+        X_eval = X_np[idx_X]
+    else:
+        X_eval = X_np
 
-    cost_matrix = ot.dist(X_np[idx_X], Y_np[idx_Y], metric='sqeuclidean')
-    w2_sq = ot.emd2(np.ones(N_eval)/N_eval, np.ones(N_eval)/N_eval, cost_matrix, numItermax=1000000)
-    return float(np.sqrt(max(w2_sq, 1e-8)))
+    if Y_np.shape[0] > N_eval:
+        idx_Y = np.random.choice(Y_np.shape[0], N_eval, replace=False)
+        Y_eval = Y_np[idx_Y]
+    else:
+        Y_eval = Y_np
+
+    marginal_a = np.ones(N_eval) / N_eval
+    marginal_b = np.ones(N_eval) / N_eval
+
+    # 1. True 1-Wasserstein (W1): Ground cost is unsquared Euclidean distance ||x - y||_2
+    cost_matrix_w1 = ot.dist(X_eval, Y_eval, metric='euclidean')
+    true_w1 = ot.emd2(marginal_a, marginal_b, cost_matrix_w1, numItermax=2000000)
+
+    # 2. True 2-Wasserstein (W2): Ground cost is squared Euclidean distance ||x - y||_2^2
+    cost_matrix_w2 = ot.dist(X_eval, Y_eval, metric='sqeuclidean')
+    true_w2_sq = ot.emd2(marginal_a, marginal_b, cost_matrix_w2, numItermax=2000000)
+    true_w2 = np.sqrt(max(true_w2_sq, 1e-8))
+
+    return {
+        "True_W1": float(true_w1),
+        "True_W2": float(true_w2)
+    }
 
 def compute_swd_multiscale(X: torch.Tensor, Y: torch.Tensor, num_projections: int = 2048) -> float:
     """
@@ -138,9 +166,15 @@ def main():
     print(f"Target Support Shape: {X_target.shape} | Generated Support Shape: {Y_gen.shape}")
 
     # Execute Evaluation Suite
+    # Inside main() of scripts/05_visualstests.py
     print("\n--- SECTION: QUANTITATIVE MINIMAX EVALUATIONS ---")
     swd_val = compute_swd_multiscale(X_target, Y_gen)
-    w2_val = compute_exact_w2(X_target, Y_gen)
+    
+    # Extract True Wasserstein Suite
+    true_w_dict = compute_true_wasserstein_metrics(X_target, Y_gen)
+    w1_val = true_w_dict["True_W1"]
+    w2_val = true_w_dict["True_W2"]
+    
     mmd_val = compute_mmd_adaptive(X_target, Y_gen)
     cov_diff = compute_covariance_discrepancy(X_target, Y_gen)
     knn_mean, knn_std = compute_1nn_stats(X_target, Y_gen)
@@ -149,12 +183,12 @@ def main():
         f"--- RIGOROUS GENERATIVE EVALUATION REPORT (arXiv:2506.19587) ---\n"
         f"Ambient Dimension (p)          : {X_target.shape[1]}\n"
         f"Sliced-Wasserstein Distance    : {swd_val:.6f}\n"
-        f"Exact 2-Wasserstein (W2) Cost  : {w2_val:.6f}\n"
+        f"True 1-Wasserstein (W1) Cost   : {w1_val:.6f}\n"
+        f"True 2-Wasserstein (W2) Cost   : {w2_val:.6f}\n"
         f"Adaptive RBF MMD (Median Heur.): {mmd_val:.6f}\n"
         f"Ambient Covariance Discrepancy : {cov_diff:.6f}\n"
         f"1-NN Two-Sample Accuracy       : {knn_mean:.4f} ± {knn_std:.4f} (Minimax Target: ~0.5000)\n"
     )
-    
     print(report)
     with open(os.path.join(args.output_dir, "evaluation_metrics_rigorous.txt"), "w") as f:
         f.write(report)

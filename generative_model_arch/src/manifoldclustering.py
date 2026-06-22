@@ -88,7 +88,8 @@ def construct_whitney_atlas(data: torch.Tensor,
         U_quad_std = U_quad.std(dim=0, keepdim=True) + 1e-8
         U_quad_norm = (U_quad - U_quad_mean) / U_quad_std
 
-        global_n_err_std = torch.sqrt(torch.var(N_err, dim=0).mean()) + 1e-6
+        # Rigorous Riemannian Normal Bundle Scaling (Replaces ambient p with normal rank p-d)
+        global_n_err_std = torch.sqrt(torch.sum(torch.var(N_err, dim=0)) / float(p - d)) + 1e-6
         N_err_norm = N_err / global_n_err_std
 
         G = torch.matmul(U_quad_norm.T, U_quad_norm)

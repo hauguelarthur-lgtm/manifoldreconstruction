@@ -33,9 +33,10 @@ def main():
     with open(args.config, 'r') as f: config = yaml.safe_load(f)
     d = int(config['manifold']['intrinsic_dim'])
     num_samples = int(config['manifold']['num_samples'])
-    p_trunc = int(config['features']['p_trunc'])
-    time_steps = int(config['integration']['time_steps'])
 
+    # Load Full Geometric Artifact Suite
+    data_ambient = torch.load(os.path.join(args.data_dir, "data.pt"), map_location=device)
+    chart_ambient_indices = torch.load(os.path.join(args.data_dir, "chart_ambient_indices.pt"), map_location='cpu')
     whitney_atlas = torch.load(os.path.join(args.data_dir, "whitney_atlas.pt"), map_location='cpu')
     membership_mask = torch.load(os.path.join(args.data_dir, "membership_mask.pt"), map_location=device)
     chart_intrinsic_coords = torch.load(os.path.join(args.data_dir, "chart_intrinsic_coords.pt"), map_location=device)
@@ -47,29 +48,52 @@ def main():
         raise RuntimeError(f"Fatal Desync: whitney_atlas contains {m} charts, but z_clusters_intrinsic "
                            f"contains {len(z_clusters_intrinsic)} slices. Re-execute scripts/02_solve_velocities.py.")
 
+    time_steps = len(precomputed_etas)
+    p_trunc = 256 
+    for eta_local in precomputed_etas[0]:
+        if eta_local.shape[0] > 0:
+            p_trunc = eta_local.shape[0]
+            break
+
     chart_probs = membership_mask.sum(dim=0).float() / membership_mask.sum()
     chart_assignments = torch.multinomial(chart_probs, num_samples, replacement=True)
 
     model = TruncatedBesovWaveletMap(ambient_dim=d, intrinsic_dim=d, p_truncation=p_trunc).to(device)
-    
-    # CRITICAL MATHEMATICAL FIX 2: Load the exact calibrated wavelet state from Stage 02
     wavelet_map_path = os.path.join(args.data_dir, "wavelet_map.pt")
-    if not os.path.exists(wavelet_map_path):
-        raise FileNotFoundError(f"Fatal: {wavelet_map_path} missing. Re-run scripts/02_solve_velocities.py.")
     model.load_state_dict(torch.load(wavelet_map_path, map_location=device))
-    print("Successfully synchronized Besov wavelet feature map with Stage 02 ground truth.")
 
-    # CRITICAL MATHEMATICAL FIX 3: Support-Confined Continuous Gaussian Prior Sampling
-    # Matches Phase 2 marginal variance while clamping strictly to the trained RKHS domain.
     Z_0_list = []
     for i in range(m):
         Z_train_i = z_clusters_intrinsic[i]
+        U_train_i = chart_intrinsic_coords[i].to(device)
         n_gen_i = int((chart_assignments == i).sum().item())
         
-        if Z_train_i.shape[0] > 0:
-            std_U_i = Z_train_i.std(dim=0, keepdim=True).to(device) if Z_train_i.shape[0] > 1 else torch.ones((1, d), device=device)
-            z_min = Z_train_i.min(dim=0).values.to(device)
-            z_max = Z_train_i.max(dim=0).values.to(device)
+        if Z_train_i.shape[0] > 0 and U_train_i.shape[0] > 0:
+            # 1. Total Ambient Empirical Energy (||X_i - mu_i||_F^2)
+            idx_i = chart_ambient_indices[i].long().to(device)
+            X_i = data_ambient[idx_i]
+            mu_i = X_i.mean(dim=0, keepdim=True)
+            var_ambient = torch.sum((X_i - mu_i)**2)
+            
+            # 2. Projected 1st-Order Intrinsic Energy (||U_i||_F^2)
+            var_intrinsic = torch.sum(U_train_i**2)
+            
+            # 3. Captured 2nd-Order Weingarten Energy (||U_quad W_i||_F^2)
+            U_quad_i = formulate_quadratic_features(U_train_i)
+            W_i = whitney_atlas[i]['W'].to(device)
+            var_quad = torch.sum(torch.matmul(U_quad_i, W_i)**2)
+            
+            # 4. Rigorous Pythagorean Energy Conservation Scalar (\gamma_i)
+            if var_intrinsic > 1e-4:
+                energy_ratio = (var_ambient - var_quad) / var_intrinsic
+                gamma_i = float(torch.sqrt(torch.clamp(energy_ratio, min=1.0)).item())
+            else:
+                gamma_i = 1.0
+
+            std_U_i = (Z_train_i.std(dim=0, keepdim=True).to(device) * gamma_i) if Z_train_i.shape[0] > 1 else torch.ones((1, d), device=device)
+            
+            z_min = Z_train_i.min(dim=0).values.to(device) * gamma_i
+            z_max = Z_train_i.max(dim=0).values.to(device) * gamma_i
             
             Z_0_raw = torch.randn((n_gen_i, d), device=device) * std_U_i
             Z_0_clamped = torch.clamp(Z_0_raw, min=z_min, max=z_max)
