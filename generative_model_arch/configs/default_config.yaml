@@ -2,9 +2,9 @@
 # regularity (beta), number of charts (m), num_time_steps.
 # Hyperparameters for Minimax-Optimal KSI Pipeline
 manifold:
-  ambient_dim: 3       # Ambient embedding space R^p
-  intrinsic_dim: 2      # Strict Riemannian surface dimension d=2
-  num_samples: 1000     # Sample complexity N (Sweep across [1000, 2000, 5000, 10000])
+  ambient_dim: 8       # Ambient embedding space R^p
+  intrinsic_dim: 4      # Strict Riemannian surface dimension d=2
+  num_samples: 20000     # Sample complexity N (Sweep across [1000, 2000, 5000, 10000])
 
 geometry:
   num_charts: auto        # CRITICAL: Must be sufficiently large (64-128) to guarantee localized differential covering nets (\delta \ll diam(M))

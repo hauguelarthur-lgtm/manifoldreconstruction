@@ -87,23 +87,80 @@ def compute_covariance_discrepancy(X: torch.Tensor, Y: torch.Tensor) -> float:
     return float((torch.norm(cov_X - cov_Y, p='fro') / (norm_X + 1e-6)).item())
 
 def visualize_topology(X: np.ndarray, Y: np.ndarray, method: str, output_path: str):
+    """
+    RIGOROUS MATHEMATICAL REWORK (PCA & TOPOLOGICAL RENDERING):
+    1. Canonical Geometry Preservation: Bypasses PCA rotation if p <= 3 to preserve physical axes.
+    2. Joint Superimposition: Overlays Target (blue) and Generated (red) in a unified 3D frame.
+    3. Multi-Planar Orthographic Shadows: Generates XY, XZ, and YZ 2D projections to unmask hidden voids.
+    4. Spectral Accounting: Computes and displays the Cumulative Explained Variance Ratio (EVR).
+    """
+    p = X.shape[1]
     data = np.vstack([X, Y])
-    reducer = PCA(n_components=3) if method == 'pca' else TSNE(n_components=3, perplexity=30, max_iter=1000, random_state=42)
-    embedding = reducer.fit_transform(data)
-    emb_X, emb_Y = embedding[:X.shape[0]], embedding[X.shape[0]:]
     
-    fig = plt.figure(figsize=(12, 6))
-    ax1 = fig.add_subplot(121, projection='3d')
-    ax1.scatter(emb_X[:, 0], emb_X[:, 1], emb_X[:, 2], alpha=0.5, s=2, c='blue', label='Empirical (Target)')
-    ax1.set_title(f'Empirical Topology ({method.upper()})')
+    # --- SPECTRAL PROJECTION & ENERGY ACCOUNTING ---
+    if method.lower() == 'pca':
+        if p <= 3:
+            # Strictly preserve canonical physical geometry if ambient space is R^2 or R^3
+            padded_data = np.zeros((data.shape[0], 3))
+            padded_data[:, :p] = data
+            emb_X = padded_data[:X.shape[0]]
+            emb_Y = padded_data[X.shape[0]:]
+            evr_str = f"Canonical Physical Geometry (p={p})"
+        else:
+            reducer = PCA(n_components=3)
+            embedding = reducer.fit_transform(data)
+            emb_X = embedding[:X.shape[0]]
+            emb_Y = embedding[X.shape[0]:]
+            evr_total = float(np.sum(reducer.explained_variance_ratio_) * 100.0)
+            evr_str = f"PCA Top 3 Subspace (EVR: {evr_total:.2f}%)"
+    else:
+        # t-SNE Fallback
+        reducer = TSNE(n_components=3, perplexity=30, max_iter=1000, random_state=42)
+        embedding = reducer.fit_transform(data)
+        emb_X = embedding[:X.shape[0]]
+        emb_Y = embedding[X.shape[0]:]
+        evr_str = "t-SNE Non-Linear Manifold Embedding"
+
+    # --- 4-PANEL DIAGNOSTIC RENDERING ENGINE ---
+    fig = plt.figure(figsize=(16, 12))
     
-    ax2 = fig.add_subplot(122, projection='3d')
-    ax2.scatter(emb_Y[:, 0], emb_Y[:, 1], emb_Y[:, 2], alpha=0.5, s=2, c='red', label='Generated (KSI)')
-    ax2.set_title(f'Generated Topology ({method.upper()})')
-    
+    # Panel 1: Joint 3D Superimposition (Perspective Axis)
+    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
+    ax1.scatter(emb_X[:, 0], emb_X[:, 1], emb_X[:, 2], alpha=0.35, s=4, c='#1f77b4', label='Empirical Ground Truth (X)')
+    ax1.scatter(emb_Y[:, 0], emb_Y[:, 1], emb_Y[:, 2], alpha=0.45, s=3, c='#d62728', label='Generated KSI Flow (Y)')
+    ax1.set_title(f"Joint 3D Superimposition\n[{evr_str}]", fontsize=11, fontweight='bold')
+    ax1.set_xlabel("Principal Axis 1"); ax1.set_ylabel("Principal Axis 2"); ax1.set_zlabel("Principal Axis 3")
+    ax1.legend(loc='upper right', markerscale=3.0)
+    ax1.view_init(elev=25.0, azim=-55.0)
+
+    # Panel 2: XY Planar Orthographic Projection (Top View)
+    ax2 = fig.add_subplot(2, 2, 2)
+    ax2.scatter(emb_X[:, 0], emb_X[:, 1], alpha=0.30, s=3, c='#1f77b4')
+    ax2.scatter(emb_Y[:, 0], emb_Y[:, 1], alpha=0.40, s=2, c='#d62728')
+    ax2.set_title("Orthographic Shadow: XY (Top View)", fontsize=11, fontweight='bold')
+    ax2.set_xlabel("Principal Axis 1"); ax2.set_ylabel("Principal Axis 2")
+    ax2.grid(True, linestyle='--', alpha=0.5); ax2.set_aspect('equal', 'datalim')
+
+    # Panel 3: XZ Planar Orthographic Projection (Front View)
+    ax3 = fig.add_subplot(2, 2, 3)
+    ax3.scatter(emb_X[:, 0], emb_X[:, 2], alpha=0.30, s=3, c='#1f77b4')
+    ax3.scatter(emb_Y[:, 0], emb_Y[:, 2], alpha=0.40, s=2, c='#d62728')
+    ax3.set_title("Orthographic Shadow: XZ (Front View)", fontsize=11, fontweight='bold')
+    ax3.set_xlabel("Principal Axis 1"); ax3.set_ylabel("Principal Axis 3")
+    ax3.grid(True, linestyle='--', alpha=0.5); ax3.set_aspect('equal', 'datalim')
+
+    # Panel 4: YZ Planar Orthographic Projection (Side View)
+    ax4 = fig.add_subplot(2, 2, 4)
+    ax4.scatter(emb_X[:, 1], emb_X[:, 2], alpha=0.30, s=3, c='#1f77b4')
+    ax4.scatter(emb_Y[:, 1], emb_Y[:, 2], alpha=0.40, s=2, c='#d62728')
+    ax4.set_title("Orthographic Shadow: YZ (Side View)", fontsize=11, fontweight='bold')
+    ax4.set_xlabel("Principal Axis 2"); ax4.set_ylabel("Principal Axis 3")
+    ax4.grid(True, linestyle='--', alpha=0.5); ax4.set_aspect('equal', 'datalim')
+
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
+    print(f"[Visualization Engine] Reworked 4-panel diagnostic dashboard rendered -> {output_path}")
 
 def main():
     parser = argparse.ArgumentParser()

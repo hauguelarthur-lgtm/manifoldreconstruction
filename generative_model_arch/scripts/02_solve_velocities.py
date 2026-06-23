@@ -119,8 +119,6 @@ def main():
         
         for i in range(m):
             # Granular step and chart cross-advancement tracker
-            sys.stdout.write(f"\r[Drift Regression] Step {step + 1}/{time_steps} | Solved chart {i + 1}/{m} ({(step * m + i + 1) / (time_steps * m) * 100:.1f}%)")
-            sys.stdout.flush()
 
             U_i = chart_intrinsic_coords[i]
             Z_i = z_clusters_intrinsic[i]
@@ -138,6 +136,9 @@ def main():
                 target_velocities=U_i - Z_i,
                 rkhs_penalty=model_i.get_rkhs_penalty()
             ))
+
+        sys.stdout.write(f"\r[Drift Regression] Step {step + 1}/{time_steps} ({(step * m+1) / (time_steps * m) * 100:.1f}%)")
+        sys.stdout.flush()
 
         all_etas.append(eta_t_local)
 

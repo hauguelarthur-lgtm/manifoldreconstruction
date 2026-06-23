@@ -19,7 +19,7 @@ def construct_whitney_atlas(data: torch.Tensor,
     resolved_beta = 1.50
 
     # INTRINSIC-RANK CALIBRATED MULTIPLICITY GOVERNOR
-    if packing_multiplier is None or packing_multiplier == 'auto' or packing_multiplier == 3.0:
+    if packing_multiplier is None or packing_multiplier == 'auto':
         tau = 1.0 + (2.0 / float(d))
     else:
         tau = float(packing_multiplier)
