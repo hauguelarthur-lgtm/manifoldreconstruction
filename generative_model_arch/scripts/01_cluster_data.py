@@ -48,7 +48,6 @@ def main():
         data=data_ambient,
         intrinsic_dim=d,
         target_beta=resolved_beta,
-        k_neighbors=int(config['geometry'].get('k_neighbors', 15)),
         empirical_config=empirical_params
     )
 
