@@ -15,8 +15,7 @@ def construct_whitney_atlas(data: torch.Tensor,
     d = int(intrinsic_dim)
     device = data.device
 
-    # Benamou-Brenier Physical Invariant
-    resolved_beta = 1.50
+    # Détermination du Beta à regarder, fixé à 1.50 en attendant.
 
     # INTRINSIC-RANK CALIBRATED MULTIPLICITY GOVERNOR
     if packing_multiplier is None or packing_multiplier == 'auto':
@@ -25,11 +24,12 @@ def construct_whitney_atlas(data: torch.Tensor,
         tau = float(packing_multiplier)
 
     # Automated Minimax Chart Determination (arXiv:2506.19587)
+    # Déterminer le nombre de charts en restant dans MinMax.
     if num_charts is None or num_charts == 'auto' or num_charts == 'none' or num_charts <= 0:
-        minimax_exponent = float(d) / (2.0 * resolved_beta + float(d))
+        minimax_exponent = float(d) / (2.0 * target_beta + float(d))
         m_optimal = tau * math.pow(N, minimax_exponent)
         m = max(int(math.ceil(m_optimal)), d + 2)
-        print(f"[DEBUG] Automated Minimax Chart Determination: Ingested N={N}, d={d}, \beta={resolved_beta:.2f}")
+        print(f"[DEBUG] Automated Minimax Chart Determination: Ingested N={N}, d={d}, \beta={target_beta:.2f}")
         print(f"[DEBUG] Multiplicity Governor \tau(d)={tau:.4f} -> Calibrated Optimal m* = {m}")
     else:
         m = int(num_charts)
