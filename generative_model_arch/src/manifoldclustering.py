@@ -94,7 +94,6 @@ class WhitneyPartitionOfUnity:
 
 def construct_whitney_atlas(data: torch.Tensor, 
                             intrinsic_dim: int,
-                            target_beta: float = 1.50,
                             empirical_config: EmpiricalConfig = None) -> tuple:
     
     # 0. Initialize default empirical configuration if none provided
@@ -104,11 +103,11 @@ def construct_whitney_atlas(data: torch.Tensor,
     N, p = data.shape
     d = int(intrinsic_dim)
     device = data.device
-    k_degree = math.floor(target_beta) + 1
+    k_degree = math.floor(empirical_config.beta) + 1
     print(k_degree)
     # 1. APPLY VOLUME SCALE TO MINIMAX RADIUS
     # delta_minimax = c * n^(-1 / (2*beta + d))
-    delta_minimax = empirical_config.volume_scale * math.pow(N, -1.0 / (2.0 * target_beta + float(d)))
+    delta_minimax = empirical_config.volume_scale * math.pow(N, -1.0 / (2.0 * empirical_config.beta + float(d)))
     
     # 2. APPLY OVERSAMPLING RATIO TO DEGREES OF FREEDOM
     poly_dim = 0
