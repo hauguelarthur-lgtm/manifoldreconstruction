@@ -215,7 +215,7 @@ def main():
         dataset = generate_nonlinear_manifold(num_samples, ambient_dim, device)
 
     output_path = os.path.join(args.output_dir, "dataset.pt")
-    torch.save(dataset.cpu(), output_path)
+    torch.save(dataset, output_path)
     print(f"Successfully generated {args.topology} ({dataset.shape}) -> {output_path}")
 
 if __name__ == "__main__": main()

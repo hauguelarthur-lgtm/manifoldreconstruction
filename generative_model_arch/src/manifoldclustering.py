@@ -15,11 +15,12 @@ class EmpiricalConfig:
     Exposes the hidden constants within the asymptotic minimax bounds 
     to calibrate the algorithm for specific real-world datasets.
     """
-    volume_scale: float = 1.0           # Multiplies delta_minimax to match data spread
+    volume_scale: float = 0.2           # Multiplies delta_minimax to match data spread
     oversample_ratio: float = 1.5       # Safety margin for degrees of freedom (e.g., 1.5x)
     lambda_base: float = 1e-7           # Absolute floor for Tikhonov regularization
     lambda_trace_scale: float = 1e-4    # Dynamic trace-scaling factor for Tikhonov regularization
     max_radius_cap: Optional[float] = None # Absolute ceiling to prevent infinite expansion in outliers
+    beta:float=1.5
 
 def get_poly_features(U: torch.Tensor, k_degree: int) -> torch.Tensor:
     """
@@ -104,7 +105,7 @@ def construct_whitney_atlas(data: torch.Tensor,
     d = int(intrinsic_dim)
     device = data.device
     k_degree = math.floor(target_beta) + 1
-
+    print(k_degree)
     # 1. APPLY VOLUME SCALE TO MINIMAX RADIUS
     # delta_minimax = c * n^(-1 / (2*beta + d))
     delta_minimax = empirical_config.volume_scale * math.pow(N, -1.0 / (2.0 * target_beta + float(d)))
@@ -123,7 +124,7 @@ def construct_whitney_atlas(data: torch.Tensor,
     # Base parameters for the fluctuating k-NN
     k_max = min(50, N - 1)  # Absolute upper bound of connections evaluated
     local_scale_neighbor = min(5, k_max) # The neighbor used to measure local density (sigma)
-    tau_reach_limit = 2.5 # Maximum allowed distance multiplier before edge is cut
+    tau_reach_limit = 4.0 # Maximum allowed distance multiplier before edge is cut
     
     # Query the maximum possible neighborhood
     nbrs = NearestNeighbors(n_neighbors=k_max, algorithm='auto').fit(np_data)

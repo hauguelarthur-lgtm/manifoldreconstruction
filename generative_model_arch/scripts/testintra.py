@@ -12,12 +12,17 @@ from matplotlib.patches import Circle
 def load_artifacts(data_dir: str):
     """Charge les tenseurs générés par 01_cluster_data.py"""
     print(f"Loading artifacts from {data_dir}...")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "scripts" else script_dir
+    sys.path.insert(0, project_root) if project_root not in sys.path else None
     data = torch.load(os.path.join(data_dir, "data.pt"))
     mask = torch.load(os.path.join(data_dir, "membership_mask.pt"))
     coords = torch.load(os.path.join(data_dir, "chart_intrinsic_coords.pt"))
-    atlas = torch.load(os.path.join(data_dir, "whitney_atlas.pt"))
+    atlas_obj = torch.load(os.path.join(data_dir, "whitney_atlas.pt"))
+    atlas_frames = atlas_obj.atlas 
     indices = torch.load(os.path.join(data_dir, "chart_ambient_indices.pt"))
-    return data, mask, coords, atlas, indices
+    return data, mask, coords, atlas_frames, indices
+
 
 def vis1_adaptive_delta_net(data, atlas):
     """
@@ -77,13 +82,14 @@ def vis3_intrinsic_flattening(coords, chart_idx=0):
         plt.scatter(U_i[:, 0], np.zeros_like(U_i[:, 0]), c='green', s=20, alpha=0.7)
         plt.yticks([])
         plt.xlabel("Intrinsic Coordinate u_1")
+        # plt.axis('equal') is strictly omitted here to prevent autoscaler hanging
     elif d >= 2:
         # If 2D+ intrinsic, plot the first two dimensions
         plt.scatter(U_i[:, 0], U_i[:, 1], c='green', s=20, alpha=0.7)
         plt.xlabel("Intrinsic Coordinate u_1"); plt.ylabel("Intrinsic Coordinate u_2")
+        plt.axis('equal') # Safe to execute for 2D+ variance
         
     plt.title(f"Vis 3: Flat Intrinsic Coordinates (Chart {chart_idx})")
-    plt.axis('equal')
     plt.grid(True, linestyle=':', alpha=0.6)
     plt.show()
 
@@ -120,7 +126,7 @@ def vis4_taylor_curvature_jet(data, atlas, indices, chart_idx=0):
     plt.legend()
     plt.show()
 
-def vis5_bump_function_blending(data, atlas, chart_a=0, chart_b=1):
+def vis5_bump_function_blending(data, atlas, chart_a=0, chart_b=52):
     """
     VISUALISATION 5: Partition of Unity Blending Weights
     Affiche la transition C^infty (fonctions de Fefferman) entre deux cartes adjacentes.
