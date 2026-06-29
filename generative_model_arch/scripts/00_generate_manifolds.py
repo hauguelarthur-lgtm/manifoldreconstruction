@@ -222,7 +222,7 @@ def main():
     parser.add_argument("--manifold", type=str, required=True, 
                         choices=list(generators.keys()),
                         help="The topological structure to generate.")
-    parser.add_argument("--n_samples", type=int, default=10000, help="Number of empirical points N.")
+    parser.add_argument("--n_samples", type=int, default=3000, help="Number of empirical points N.")
     parser.add_argument("--noise", type=float, default=0.0, help="Standard deviation of ambient Gaussian noise.")
     parser.add_argument("--out_dir", type=str, default="../generative_model_arch/data/raw", help="Output directory.")
     

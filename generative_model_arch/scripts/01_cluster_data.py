@@ -27,7 +27,7 @@ def main():
     # Maps real-world dataset adjustments to the mathematical backend
     emp_cfg_dict = config.get('empirical_tuning', {})
     empirical_params = EmpiricalConfig(
-        volume_scale=float(emp_cfg_dict.get('volume_scale', 2.0)),
+        volume_scale=float(emp_cfg_dict.get('volume_scale', 0.5)),
         oversample_ratio=float(emp_cfg_dict.get('oversample_ratio', 1.5)),
         lambda_base=float(emp_cfg_dict.get('lambda_base', 1e-7)),
         lambda_trace_scale=float(emp_cfg_dict.get('lambda_trace_scale', 1e-4)),
@@ -41,11 +41,10 @@ def main():
     
     # 3. EXECUTE RADIUS-DRIVEN ATLAS CONSTRUCTION
     # Removed legacy 'num_charts' and 'packing_multiplier' arguments
-    print(f"Executing Whitney Partition... Target Beta: {beta}")
+    #print(f"Executing Whitney Partition... Target Beta: {beta}")
     (membership_mask, chart_intrinsic_coords, whitney_atlas, chart_ambient_indices) = construct_whitney_atlas(
         data=data_ambient,
         intrinsic_dim=d,
-        target_beta=beta,
         empirical_config=empirical_params
     )
 
@@ -58,7 +57,7 @@ def main():
     
     # Save the dynamically resolved beta to ensure the SDE drift 
     # executes the exact corresponding polynomial combinations
-    torch.save(torch.tensor(beta), os.path.join(args.output_dir, "besov_beta.pt"))
+    #torch.save(torch.tensor(beta), os.path.join(args.output_dir, "besov_beta.pt"))
     
     print("Phase 1 Complete -> Radius-Driven Artifacts and Dynamic Regularity successfully serialized.")
 

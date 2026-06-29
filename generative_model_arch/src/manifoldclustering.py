@@ -55,7 +55,7 @@ class WhitneyPartitionOfUnity:
         mask = dist_sq < r_sq
         weights = torch.zeros_like(dist_sq)
         normalized_sq = dist_sq[mask] / r_sq
-        weights[mask] = torch.exp(-1.0 / (1.0 - normalized_sq))
+        weights[mask] = np.max(torch.exp(-1.0 / (1.0 - normalized_sq)), 1e-7)
         return weights
 
     def evaluate_manifold(self, x: torch.Tensor) -> torch.Tensor:
