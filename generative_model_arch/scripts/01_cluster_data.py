@@ -8,7 +8,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "scripts" else script_dir
 sys.path.insert(0, project_root) if project_root not in sys.path else None
 
-from src.manifoldclustering import construct_whitney_atlas, EmpiricalConfig
+from src.manifoldclustering import construct_whitney_atlas, EmpiricalConfig, spectral_geodesic_fps
 
 def main():
     parser = argparse.ArgumentParser()

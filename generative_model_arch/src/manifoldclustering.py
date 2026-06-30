@@ -163,16 +163,28 @@ def construct_whitney_atlas(data: torch.Tensor,
     fps_indices = [int(torch.randint(0, N, (1,)).item())]
     geodesic_distances = dijkstra(knn_graph, indices=fps_indices[0], directed=False)
     
+    # Inside your Dijkstra while loop:
     while True:
-        valid_distances = geodesic_distances[geodesic_distances != np.inf]
-        if len(valid_distances) == 0:
+        # 1. Compute Euclidean distance from all points to currently selected centers
+        current_centers = data[fps_indices]
+        eucl_dists_to_centers = torch.cdist(data, current_centers) # [N, m]
+        min_eucl_dists = torch.min(eucl_dists_to_centers, dim=1).values.cpu().numpy()
+        
+        # 2. Mask out candidate points that sit too close to existing centers in ambient space
+        exclusion_radius = delta_minimax * 0.6  # Enforce ambient separation floor
+        valid_candidates_mask = (min_eucl_dists >= exclusion_radius) & (geodesic_distances != np.inf)
+        
+        if not np.any(valid_candidates_mask):
             break
             
-        max_dist = float(np.max(valid_distances))
+        # 3. Select farthest geodesic point strictly from spatially separated candidates
+        masked_geodesic_dists = np.where(valid_candidates_mask, geodesic_distances, -1.0)
+        max_dist = float(np.max(masked_geodesic_dists))
+        
         if max_dist <= delta_minimax:
             break
             
-        farthest_idx = np.argmax(geodesic_distances)
+        farthest_idx = int(np.argmax(masked_geodesic_dists))
         fps_indices.append(farthest_idx)
         
         dist_to_new = dijkstra(knn_graph, indices=farthest_idx, directed=False)
