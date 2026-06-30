@@ -55,53 +55,22 @@ def execute_verification_suite(data, mask, coords, atlas, indices):
     # =====================================================================
     mu_tensor = torch.stack([chart['mu'] for chart in atlas])
     
-    # 1. Continuous Ambient Lower Bound
-    euclidean_matrix = torch.cdist(mu_tensor, mu_tensor).numpy()
+    # 1. Pure Ambient Euclidean Lower Bound
+    # Since clustering now uses torch.cdist, we only need to test torch.cdist
+    euclidean_matrix = torch.cdist(mu_tensor, mu_tensor).cpu().numpy()
     
-    # 2. Discrete Geodesic Lower Bound
-    dist_to_data = torch.cdist(mu_tensor, data)
-    center_indices = torch.argmin(dist_to_data, dim=1).numpy()
+    # Fill the diagonal with infinity so a center's distance to itself (0.0) is ignored
+    np.fill_diagonal(euclidean_matrix, np.inf)
     
-    np_data = data.cpu().numpy()
-    N_points = np_data.shape[0]
+    # Find the closest distance between any two chart centers
+    min_separation = float(np.min(euclidean_matrix))
     
-    k_max = min(50, N_points - 1)
-    local_scale_neighbor = min(5, k_max)
-    tau_reach_limit = 2.5
-    
-    nbrs = NearestNeighbors(n_neighbors=k_max, algorithm='auto').fit(np_data)
-    distances, indices = nbrs.kneighbors(np_data)
-    local_sigma = distances[:, local_scale_neighbor]
-    
-    row_indices, col_indices, edge_weights = [], [], []
-    for i in range(N_points):
-        max_valid_dist = tau_reach_limit * local_sigma[i]
-        for j_idx in range(1, k_max):
-            j = indices[i, j_idx]
-            dist = distances[i, j_idx]
-            if dist <= max_valid_dist:
-                row_indices.append(i)
-                col_indices.append(j)
-                edge_weights.append(dist)
-                
-    directed_graph = csr_matrix((edge_weights, (row_indices, col_indices)), shape=(N_points, N_points))
-    adaptive_knn_graph = directed_graph.maximum(directed_graph.T)
-    
-    geodesic_matrix = dijkstra(csgraph=adaptive_knn_graph, directed=False, indices=center_indices)
-    center_to_center_geodesic = geodesic_matrix[:, center_indices]
-    
-    # 3. Hybrid Maximum Lower Bound (Resolves 0.0 Quantization)
-    hybrid_separation_matrix = np.maximum(center_to_center_geodesic, euclidean_matrix)
-    
-    np.fill_diagonal(hybrid_separation_matrix, np.inf)
-    min_separation = float(np.min(hybrid_separation_matrix))
-    
-    # 4. Barycentric Degeneracy Threshold
-    # We test for critical redundancy (centers merging), not initial seed spacing.
+    # 2. Barycentric Degeneracy Threshold
+    # We test for critical redundancy (centers merging)
     critical_degeneracy_limit = empirical_delta_minimax
     
-    report["1.2_Intrinsic_Geodesic_Separation"] = {
-        "metric": "Minimum hybrid separation (max of Dijkstra and Euclidean)",
+    report["1.2_Ambient_Euclidean_Separation"] = {
+        "metric": "Minimum ambient Euclidean separation",
         "value": min_separation,
         "target_degeneracy_limit": critical_degeneracy_limit,
         "passed": min_separation >= critical_degeneracy_limit

@@ -118,77 +118,37 @@ def construct_whitney_atlas(data: torch.Tensor,
     min_points_required = int(math.ceil((poly_dim + d) * empirical_config.oversample_ratio))
 
     # 3. RADIUS-DRIVEN INTRINSIC GEODESIC FPS
-    np_data = data.cpu().numpy()
     
-    # Base parameters for the fluctuating k-NN
-    k_max = min(50, N - 1)  # Absolute upper bound of connections evaluated
-    local_scale_neighbor = min(5, k_max) # The neighbor used to measure local density (sigma)
-    tau_reach_limit = 4.0 # Maximum allowed distance multiplier before edge is cut
+    # 1. Initialize with a random starting point
+    fps_indices = [int(torch.randint(0, N, (1,), device=device).item())]
     
-    # Query the maximum possible neighborhood
-    nbrs = NearestNeighbors(n_neighbors=k_max, algorithm='auto').fit(np_data)
-    distances, indices = nbrs.kneighbors(np_data)
-    
-    row_indices = []
-    col_indices = []
-    edge_weights = []
-    
-    # Dynamically fluctuate k_i based on local density
-    for i in range(N):
-        # Sigma_i is the distance to the m-th closest neighbor (local density proxy)
-        sigma_i = distances[i, local_scale_neighbor - 1] 
-        
-        # The adaptive cutoff threshold for point i
-        adaptive_threshold = sigma_i * tau_reach_limit
-        
-        for j_idx, neighbor_dist in enumerate(distances[i]):
-            if j_idx == 0: 
-                continue # Skip self-loop
-                
-            neighbor_index = indices[i, j_idx]
-            
-            # FLUCTUATION LOGIC: Only keep the edge if it respects the local density bound.
-            # In dense areas, many points pass. In sparse areas, very few pass.
-            if neighbor_dist <= adaptive_threshold:
-                row_indices.append(i)
-                col_indices.append(neighbor_index)
-                edge_weights.append(neighbor_dist)
-                
-    # Build the sparse adjacency matrix for Dijkstra
-    knn_graph = sp.csr_matrix((edge_weights, (row_indices, col_indices)), shape=(N, N))
-    
-    # Ensure symmetry (undirected graph) so paths can travel both ways
-    knn_graph = knn_graph.maximum(knn_graph.T)
-    
-    fps_indices = [int(torch.randint(0, N, (1,)).item())]
-    geodesic_distances = dijkstra(knn_graph, indices=fps_indices[0], directed=False)
-    
-    # Inside your Dijkstra while loop:
+    # 2. Track the minimum Euclidean distance from all points to the selected centers
+    # Unsqeeze is used to make the center a [1, p] tensor for cdist
+    min_euclidean_dists = torch.cdist(data, data[fps_indices[0]].unsqueeze(0)).squeeze(1)
+
     while True:
-        # 1. Compute Euclidean distance from all points to currently selected centers
-        current_centers = data[fps_indices]
-        eucl_dists_to_centers = torch.cdist(data, current_centers) # [N, m]
-        min_eucl_dists = torch.min(eucl_dists_to_centers, dim=1).values.cpu().numpy()
+        # Find the maximum of the minimum distances to current centers
+        max_dist = torch.max(min_euclidean_dists).item()
         
-        # 2. Mask out candidate points that sit too close to existing centers in ambient space
-        exclusion_radius = delta_minimax * 0.6  # Enforce ambient separation floor
-        valid_candidates_mask = (min_eucl_dists >= exclusion_radius) & (geodesic_distances != np.inf)
-        
-        if not np.any(valid_candidates_mask):
-            break
-            
-        # 3. Select farthest geodesic point strictly from spatially separated candidates
-        masked_geodesic_dists = np.where(valid_candidates_mask, geodesic_distances, -1.0)
-        max_dist = float(np.max(masked_geodesic_dists))
-        
+        # Halting Gate: Stop the exact moment the entire dataset is covered
         if max_dist <= delta_minimax:
             break
             
-        farthest_idx = int(np.argmax(masked_geodesic_dists))
+        # Select the farthest point as the new chart center
+        farthest_idx = int(torch.argmax(min_euclidean_dists).item())
+        
+        # Epsilon precision guard against float32 floating-point stall
+        if min_euclidean_dists[farthest_idx].item() <= delta_minimax + 1e-7:
+            break
+            
         fps_indices.append(farthest_idx)
         
-        dist_to_new = dijkstra(knn_graph, indices=farthest_idx, directed=False)
-        geodesic_distances = np.minimum(geodesic_distances, dist_to_new)
+        # Compute distances from all points to the newly added center
+        dist_to_new = torch.cdist(data, data[farthest_idx].unsqueeze(0)).squeeze(1)
+        
+        # Update the tracking array: a point's distance to the net is the min of its old distance 
+        # and its distance to the new center
+        min_euclidean_dists = torch.minimum(min_euclidean_dists, dist_to_new)
 
     # 4. CHART ASSIGNMENT VIA DUAL-CONDITION BANDWIDTHS
     m = len(fps_indices)
