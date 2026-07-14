@@ -8,7 +8,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "scripts" else script_dir
 sys.path.insert(0, project_root) if project_root not in sys.path else None
 
-from src.manifoldclustering import construct_whitney_atlas, EmpiricalConfig, spectral_geodesic_fps
+from src.manifoldclustering import construct_whitney_atlas, EmpiricalConfig, get_poly_features, WhitneyPartitionOfUnity
 
 def main():
     parser = argparse.ArgumentParser()
@@ -40,9 +40,8 @@ def main():
     data_ambient = torch.load(args.data_path, map_location=device)
     
     # 3. EXECUTE RADIUS-DRIVEN ATLAS CONSTRUCTION
-    # Removed legacy 'num_charts' and 'packing_multiplier' arguments
-    #print(f"Executing Whitney Partition... Target Beta: {beta}")
-    (membership_mask, chart_intrinsic_coords, whitney_atlas, chart_ambient_indices) = construct_whitney_atlas(
+
+    (membership_mask, chart_intrinsic_coords, whitney_atlas, chart_ambient_indices, chart_centers_indices) = construct_whitney_atlas(
         data=data_ambient,
         intrinsic_dim=d,
         empirical_config=empirical_params
@@ -54,12 +53,13 @@ def main():
     torch.save(chart_intrinsic_coords, os.path.join(args.output_dir, "chart_intrinsic_coords.pt"))
     torch.save(whitney_atlas, os.path.join(args.output_dir, "whitney_atlas.pt"))
     torch.save(chart_ambient_indices, os.path.join(args.output_dir, "chart_ambient_indices.pt"))
+    torch.save(chart_centers_indices, os.path.join(args.output_dir, "chart_centers_indices.pt"))
     
     # Save the dynamically resolved beta to ensure the SDE drift 
     # executes the exact corresponding polynomial combinations
     #torch.save(torch.tensor(beta), os.path.join(args.output_dir, "besov_beta.pt"))
     
-    print("Phase 1 Complete -> Radius-Driven Artifacts and Dynamic Regularity successfully serialized.")
+    print("Phase 1 Complete -> Radius-Driven Artifac    ts and Dynamic Regularity successfully serialized.")
 
 if __name__ == "__main__": 
     main()

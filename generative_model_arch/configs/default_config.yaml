@@ -4,14 +4,7 @@
 manifold:
   ambient_dim: 3       # Ambient embedding space R^p
   intrinsic_dim: 2      # Strict Riemannian surface dimension d=2
-  num_samples: 2000     # Sample complexity N (Sweep across [1000, 2000, 5000, 10000])
+  num_samples: 3000     # Sample complexity N (Sweep across [1000, 2000, 5000, 10000])
+  noise: 0.0
 
-geometry:
-  num_charts: auto        # CRITICAL: Must be sufficiently large (64-128) to guarantee localized differential covering nets (\delta \ll diam(M))
-
-features:
-  p_trunc: auto
-  besov_beta: 1.5
-
-integration:
-  time_steps: auto
+ 

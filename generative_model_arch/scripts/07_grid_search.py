@@ -14,18 +14,7 @@ project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "s
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# 2. Import the verification suite and functional entry point
-try:
-    from scripts.verificationsconditions import execute_verification_suite, load_artifacts
-except ImportError as e:
-    print(f"Error: Must ensure scripts/verificationsconditions.py is accessible. Details: {e}")
-    sys.exit(1)
-
-try:
-    from src.manifoldclustering import construct_whitney_atlas
-except ImportError as e:
-    print(f"Error: Could not import construct_whitney_atlas from src.manifoldclustering. Details: {e}")
-    sys.exit(1)
+from src.manifoldclustering import construct_whitney_atlas, EmpiricalConfig
 
 def compute_fitness_score(report: Dict[str, Any]) -> float:
     """

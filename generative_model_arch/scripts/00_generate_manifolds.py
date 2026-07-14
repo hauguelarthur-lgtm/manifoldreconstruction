@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import argparse
+import yaml
 
 
 
@@ -222,15 +223,19 @@ def main():
     parser.add_argument("--manifold", type=str, required=True, 
                         choices=list(generators.keys()),
                         help="The topological structure to generate.")
-    parser.add_argument("--n_samples", type=int, default=3000, help="Number of empirical points N.")
-    parser.add_argument("--noise", type=float, default=0.0, help="Standard deviation of ambient Gaussian noise.")
     parser.add_argument("--out_dir", type=str, default="../generative_model_arch/data/raw", help="Output directory.")
-    
+    parser.add_argument("--config", type=str, default=os.path.join(project_root, "configs", "default_config.yaml"))
     args = parser.parse_args()
+
+    with open(args.config, 'r') as f: config = yaml.safe_load(f)
+
+    num_samples = int(config['manifold']['num_samples'])
+    noise = float(config['manifold']['noise'])
+
     os.makedirs(args.out_dir, exist_ok=True)
     
-    print(f"Generating {args.manifold} (N={args.n_samples}, noise={args.noise})...")
-    data = generators[args.manifold](args.n_samples, args.noise)
+    print(f"Generating {args.manifold} (N={num_samples}, noise={noise})...")
+    data = generators[args.manifold](num_samples, noise)
     
     out_path = os.path.join(args.out_dir, "dataset.pt")
     torch.save(data, out_path)
