@@ -73,7 +73,7 @@ def main():
     # Lambda parameters removed; they are handled empirically inside algebraic_engine.py
     # C_overlap 1.0 is removed in favor of Safe Harbor blending [1.4 - 1.8]
     grid_space = {
-        'volume_scale': [0.1, 0.2, 0.5],
+        'volume_scale': [0.5, 1, 5, 10],
         'C_overlap': [1.4, 1.6, 1.8], 
         'beta': pruned_betas
     }
