@@ -2,9 +2,9 @@
 # regularity (beta), number of charts (m), num_time_steps.
 # Hyperparameters for Minimax-Optimal KSI Pipeline
 manifold:
-  ambient_dim: 3       # Ambient embedding space R^p
-  intrinsic_dim: 2      # Strict Riemannian surface dimension d=2
-  num_samples: 3000     # Sample complexity N (Sweep across [1000, 2000, 5000, 10000])
+  ambient_dim: 5       # Ambient embedding space R^p
+  intrinsic_dim: 3      # Strict Riemannian surface dimension d=2
+  num_samples: 50000     # Sample complexity N (Sweep across [1000, 2000, 5000, 10000])
   noise: 0.0
 
  

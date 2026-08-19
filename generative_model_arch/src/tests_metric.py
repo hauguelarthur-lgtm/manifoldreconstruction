@@ -166,9 +166,9 @@ def test_metrics(global_manifold, fps_centers, global_membership_mask, data_ambi
     structural_variance = total_atlas_params / float(N)
 
         
-    # 4. Total Upgraded Minimax Risk
+    # 4. Total Upgraded Risk
     mean_overlap = overlap_dict['mean_overlap']
-    score = (nmse + structural_variance) * mean_overlap
+    score = (nmse +1 + structural_variance)
 
     print(f"Bias: {nmse:.4e} | Var: {structural_variance:.4e} | Charts: {m} | Overlap: {mean_overlap:.2f} | Score: {score:.4e}")
     

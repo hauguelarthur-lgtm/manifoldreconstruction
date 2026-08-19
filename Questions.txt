@@ -1,0 +1,5 @@
+1. Charts construction
+
+Q1 : Why r/100 (and then r/10) and not directly r/10 (Or just r - cst)
+Q2 : How many charts ? Same method as Stéphanovitch paper ? Undetermined ? Variable dependant ? 
+Q3  : Which distance ? Geodesic ? If such, What method to determined it ? 

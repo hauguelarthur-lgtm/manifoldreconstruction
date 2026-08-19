@@ -16,29 +16,6 @@ from src.manifoldclustering import construct_whitney_atlas, EmpiricalConfig
 from src.algebraic_engine import apply_algebraic_taylor_regression, AlgebraicWhitneyEvaluator
 from src.tests_metric import test_metrics
 
-def calculate_pre_search_beta_max(N: int, d: int, volume_scale: float = 0.2, lambda_base: float = 1e-8) -> float:
-    """
-    Computes the maximum viable Hölder smoothness beta before grid execution
-    by evaluating the combinatorial rank density and spectral condition decay.
-    """
-    max_k = 1
-    for k in range(2, 15):
-        candidate_beta = float(k) - 0.5
-        d_poly = math.comb(d + k, k) - 1
-        
-        exponent = -float(d) / (2.0 * candidate_beta + float(d))
-        expected_n_i = N * (volume_scale ** d) * (N ** exponent)
-        
-        density_pass = expected_n_i >= (d_poly + d + 5) 
-        min_eigenvalue_ratio = (3.5 + 0.5 * d) ** (-k)
-        spectral_pass = min_eigenvalue_ratio >= lambda_base
-        
-        if density_pass and spectral_pass:
-            max_k = k
-        else:
-            break
-            
-    return max(1.5, float(max_k) - 0.01)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -61,21 +38,16 @@ def main():
 
     # 2. Pre-Search Pruning
     # Calculate ceiling dynamically based on dataset size and dimension
-    beta_ceiling = calculate_pre_search_beta_max(N=N, d=d, volume_scale=0.2, lambda_base=1e-8)
     print(f"\n--- Pre-Search Analysis ---")
     print(f"Dataset Size (N): {N}, Intrinsic Dim (d): {d}")
-    print(f"Pruning grid search. Maximum viable Beta = {beta_ceiling:.2f}\n")
 
-    # Generate candidate betas that strictly respect the theoretical ceiling
-    raw_beta_candidates = [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
-    pruned_betas = [b for b in raw_beta_candidates if b <= beta_ceiling]
 
     # Lambda parameters removed; they are handled empirically inside algebraic_engine.py
     # C_overlap 1.0 is removed in favor of Safe Harbor blending [1.4 - 1.8]
     grid_space = {
-        'volume_scale': [0.5, 1, 5, 10],
-        'C_overlap': [1.4, 1.6, 1.8], 
-        'beta': pruned_betas
+        'volume_scale': [5, 6,7,8,10,15,20],
+        'C_overlap': [1.4], 
+        'beta': [0.5,1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
     }
 
     keys, values = zip(*grid_space.items())
@@ -138,9 +110,16 @@ def main():
         print(score)
             # Log and track best geometric configuration
         if score < best_score:
+            best_score = score
             best_params = params
             best_artifacts = (global_membership_mask, intrinsic_coords, augmented_atlas, chart_ambient_indices, fps_centers)
             print(f"[{idx+1}/{len(permutations)}] New best score: {best_score:.6f} via {best_params}")
+        
+        else:
+            del global_membership_mask
+            del algebraic_manifold
+            del augmented_atlas
+            torch.cuda.empty_cache()
 
 
     if best_score == float('inf') or best_artifacts is None:
