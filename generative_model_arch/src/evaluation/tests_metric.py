@@ -143,7 +143,7 @@ def evaluate_reconstruction_mse(global_manifold, data_ambient: torch.Tensor) -> 
 
 
 
-def test_metrics(global_manifold, fps_centers, global_membership_mask, data_ambient, d: int, beta: float) -> float:
+def test_metrics(global_manifold, fps_centers, global_membership_mask, data_ambient, d: int, p: int, beta: float) -> float:
     overlap_dict = test_minimum_chart_overlap(global_membership_mask)
     
     # Strict Topological Coverage Guard
@@ -160,15 +160,19 @@ def test_metrics(global_manifold, fps_centers, global_membership_mask, data_ambi
     baseline_var = torch.mean(torch.sum((data_ambient - data_mean)**2, dim=1)).item()
     nmse = raw_mse / max(baseline_var, 1e-8)
     
-    # 2. Beta-Penalized Structural Variance (Degrees of Freedom per sample)
+    # 2. Exact Ambient Structural Variance
+    # Degrees of freedom per intrinsic domain excluding intercept
     d_poly = math.comb(d + k_degree, k_degree) - 1
-    total_atlas_params = m * d_poly
-    structural_variance = total_atlas_params / float(N)
-
-        
-    # 4. Total Upgraded Risk
+    
+    # Tensor mapping applies strictly to the normal bundle (p - d)
+    # The penalty is amplified by the redundancy of the partition of unity
     mean_overlap = overlap_dict['mean_overlap']
-    score = (nmse +1 + structural_variance)
+    total_atlas_params = m * d_poly * (p - d) * mean_overlap
+    
+    structural_variance = total_atlas_params / (100*float(N))
+
+    # 3. Total Upgraded Risk (Approximated Mallows' C_p)
+    score = nmse + structural_variance
 
     print(f"Bias: {nmse:.4e} | Var: {structural_variance:.4e} | Charts: {m} | Overlap: {mean_overlap:.2f} | Score: {score:.4e}")
     
